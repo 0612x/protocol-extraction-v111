@@ -1,0 +1,1309 @@
+
+import React, { useState, useEffect, useRef } from 'react';
+import { GridItem, InventoryState } from '../../types';
+import { INVENTORY_WIDTH, INVENTORY_HEIGHT, SAFE_ZONE_WIDTH, LOOT_TABLE, EQUIPMENT_ROW_COUNT } from '../../constants';
+import { canPlaceItem, placeItemInGrid, removeItemFromGrid, rotateMatrix, createEmptyGrid, findSmartArrangement } from '../../utils/gridLogic';
+import { LucideRotateCw, LucideTrash2, LucideBox, LucideSearch, LucideCheckCircle, LucideLoader2, LucideArchive, LucideShieldCheck, LucideLock, LucideInfo, LucideZap, LucideX, LucideScanLine, LucideGrab, LucideCoins, LucideEye, LucidePlus } from 'lucide-react';
+
+interface InventoryViewProps {
+  inventory: InventoryState;
+  setInventory: React.Dispatch<React.SetStateAction<InventoryState>>;
+  onFinish: () => void;
+  isLootPhase: boolean;
+  isCombat?: boolean;
+  onConsume?: (item: GridItem) => void; 
+  currentStage: number;
+  maxStage: number;
+}
+
+const CONTAINER_WIDTH = 8;
+const CONTAINER_HEIGHT = 4;
+const CELL_SIZE = 36; // px (w-9 h-9 is 2.25rem = 36px)
+const CELL_GAP = 4; // gap-1 is 4px
+
+const TYPE_LABELS: Record<string, string> = {
+    'CONSUMABLE': '消耗品',
+    'ARTIFACT': '遗物',
+    'LOOT': '战利品'
+};
+
+const STAT_LABELS: Record<string, string> = {
+    'damageBonus': '攻击力',
+    'shieldBonus': '护甲效能',
+    'hpBonus': '生命上限',
+    'shieldStart': '初始护甲',
+    'thorns': '荆棘',
+    'cleanse': '净化',
+    'heal': '治疗'
+};
+
+// Helper to determine borders for unified shape look (Robust Version)
+const getSmartBorders = (shape: number[][], r: number, c: number) => {
+    if (!shape || !shape[r]) return {}; 
+
+    const h = shape.length;
+    const w = shape[0].length;
+    
+    // Safe check helper
+    const isFilled = (y: number, x: number) => {
+        if (y < 0 || y >= h || x < 0 || x >= w) return false;
+        return shape[y] && shape[y][x] === 1;
+    };
+
+    const top = !isFilled(r - 1, c);
+    const bottom = !isFilled(r + 1, c);
+    const left = !isFilled(r, c - 1);
+    const right = !isFilled(r, c + 1);
+
+    return {
+        borderTopWidth: top ? '1px' : '0',
+        borderBottomWidth: bottom ? '1px' : '0',
+        borderLeftWidth: left ? '1px' : '0',
+        borderRightWidth: right ? '1px' : '0',
+        // Add rounded corners for outer edges
+        borderTopLeftRadius: (top && left) ? '4px' : '0',
+        borderTopRightRadius: (top && right) ? '4px' : '0',
+        borderBottomLeftRadius: (bottom && left) ? '4px' : '0',
+        borderBottomRightRadius: (bottom && right) ? '4px' : '0',
+    };
+};
+
+export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInventory, onFinish, isLootPhase, isCombat = false, onConsume, currentStage, maxStage }) => {
+  const [isBoxOpen, setIsBoxOpen] = useState(false);
+  const [lootGrid, setLootGrid] = useState<(string | null)[][]>(createEmptyGrid(CONTAINER_WIDTH, CONTAINER_HEIGHT));
+  const [lootItems, setLootItems] = useState<GridItem[]>([]);
+  
+  // Interaction State
+  const [selectedItem, setSelectedItem] = useState<GridItem | null>(null);
+  const [dragState, setDragState] = useState<{
+      item: GridItem;
+      sourceGrid: 'PLAYER' | 'LOOT';
+      originalX: number;
+      originalY: number;
+      startX: number;
+      startY: number;
+      currentX: number;
+      currentY: number;
+      grabOffsetX: number;
+      grabOffsetY: number;
+      isDragging: boolean;
+  } | null>(null);
+
+  // Smart Arrangement Preview State
+  const [smartPreview, setSmartPreview] = useState<{
+      targetGrid: 'PLAYER' | 'LOOT';
+      movedItems: GridItem[];
+  } | null>(null);
+
+  // Search/Identify State
+  const [searchingItemId, setSearchingItemId] = useState<string | null>(null);
+  const [justRevealedId, setJustRevealedId] = useState<string | null>(null); // For feedback animation
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Refs for Grids to calculate hover
+  const playerGridRef = useRef<HTMLDivElement>(null);
+  const lootGridRef = useRef<HTMLDivElement>(null);
+
+  // Determine Active Grid for Ghost Rendering (Prevent Double Ghost)
+  let activeGhostGrid: 'PLAYER' | 'LOOT' | null = null;
+  if (dragState && dragState.isDragging) {
+      const pRect = playerGridRef.current?.getBoundingClientRect();
+      const lRect = lootGridRef.current?.getBoundingClientRect();
+      const { currentX, currentY } = dragState;
+
+      if (pRect && 
+          currentX >= pRect.left && currentX <= pRect.right && 
+          currentY >= pRect.top && currentY <= pRect.bottom) {
+          activeGhostGrid = 'PLAYER';
+      } else if (lRect && 
+          currentX >= lRect.left && currentX <= lRect.right && 
+          currentY >= lRect.top && currentY <= lRect.bottom) {
+          activeGhostGrid = 'LOOT';
+      }
+  }
+
+  // --- LOOT GENERATION ---
+  useEffect(() => {
+    if (isLootPhase && lootItems.length === 0 && !isBoxOpen) {
+      let currentGrid = createEmptyGrid(CONTAINER_WIDTH, CONTAINER_HEIGHT);
+      const newItems: GridItem[] = [];
+      const dropCount = Math.floor(Math.random() * 3) + 2; 
+
+      for (let i = 0; i < dropCount; i++) {
+        const template = LOOT_TABLE[Math.floor(Math.random() * LOOT_TABLE.length)];
+        let placed = false;
+        let attempts = 0;
+        
+        // Create Rectangular Mask for Unidentified State
+        const rows = template.shape.length;
+        const cols = template.shape[0].length;
+        const rectShape = Array.from({ length: rows }, () => Array(cols).fill(1));
+
+        while (!placed && attempts < 20) {
+           const randX = Math.floor(Math.random() * CONTAINER_WIDTH);
+           const randY = Math.floor(Math.random() * CONTAINER_HEIGHT);
+           
+           const newItem: GridItem = {
+               ...template,
+               id: `loot-${Date.now()}-${i}`,
+               x: randX,
+               y: randY,
+               rotation: 0,
+               isIdentified: false,
+               shape: rectShape, // Use Rectangle initially
+               originalShape: template.shape, // Store real shape
+               quantity: 1
+           };
+           
+           if (canPlaceItem(currentGrid, newItem, randX, randY)) {
+               currentGrid = placeItemInGrid(currentGrid, newItem, randX, randY);
+               newItems.push(newItem);
+               placed = true;
+           }
+           attempts++;
+        }
+      }
+      setLootItems(newItems);
+      setLootGrid(currentGrid);
+    }
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLootPhase]);
+
+  // --- TEST BUTTON HANDLER ---
+  const handleAddTestLoot = () => {
+      const template = LOOT_TABLE[Math.floor(Math.random() * LOOT_TABLE.length)];
+      const rows = template.shape.length;
+      const cols = template.shape[0].length;
+      const rectShape = Array.from({ length: rows }, () => Array(cols).fill(1));
+      
+      let placed = false;
+      let currentGrid = [...lootGrid];
+      let newItems = [...lootItems];
+
+      // Try random positions
+      for(let attempt=0; attempt<50; attempt++) {
+           const randX = Math.floor(Math.random() * CONTAINER_WIDTH);
+           const randY = Math.floor(Math.random() * CONTAINER_HEIGHT);
+           
+           const newItem: GridItem = {
+               ...template,
+               id: `loot-test-${Date.now()}`,
+               x: randX,
+               y: randY,
+               rotation: 0,
+               isIdentified: false,
+               shape: rectShape,
+               originalShape: template.shape,
+               quantity: 1
+           };
+           
+           if (canPlaceItem(currentGrid, newItem, randX, randY)) {
+               currentGrid = placeItemInGrid(currentGrid, newItem, randX, randY);
+               newItems.push(newItem);
+               setLootItems(newItems);
+               setLootGrid(currentGrid);
+               placed = true;
+               break;
+           }
+      }
+      
+      if (!placed) {
+          console.log("Loot box full or no space for item");
+      }
+  };
+
+  // --- IDENTIFY LOGIC ---
+  const handleSearchItem = (item: GridItem) => {
+      if (searchingItemId) return;
+      if (item.isIdentified) return; 
+
+      setSearchingItemId(item.id);
+      
+      // Dynamic Search Time based on Rarity
+      let duration = 800; // Common
+      if (item.rarity === 'RARE') duration = 1500;
+      if (item.rarity === 'LEGENDARY') duration = 3000;
+      
+      timerRef.current = setTimeout(() => {
+          completeSearch(item.id);
+      }, duration);
+  };
+
+  const handleTakeAll = () => {
+      // Move all identified items from Loot to Player
+      
+      let currentLootItems = [...lootItems];
+      let currentLootGrid = [...lootGrid];
+      let currentPlayerItems = [...inventory.items];
+      let currentPlayerGrid = [...inventory.grid];
+      let changed = false;
+
+      // Identify items first? No, only take identified.
+      const identifiedLoot = currentLootItems.filter(i => i.isIdentified);
+      
+      for (const item of identifiedLoot) {
+          // Attempt simple place first
+          let placed = false;
+          
+          // TRY STACKING FIRST
+          if (item.type === 'CONSUMABLE') {
+              for (const existingItem of currentPlayerItems) {
+                  if (existingItem.type === 'CONSUMABLE' && existingItem.name === item.name) {
+                      existingItem.quantity = (existingItem.quantity || 1) + (item.quantity || 1);
+                      currentLootGrid = removeItemFromGrid(currentLootGrid, item.id);
+                      currentLootItems = currentLootItems.filter(i => i.id !== item.id);
+                      placed = true;
+                      changed = true;
+                      break;
+                  }
+              }
+          }
+
+          if (!placed) {
+              // Try placing in grid
+              for (let y = 0; y < INVENTORY_HEIGHT; y++) {
+                  if (placed) break;
+                  for (let x = 0; x < INVENTORY_WIDTH; x++) {
+                      if (canPlaceItem(currentPlayerGrid, item, x, y)) {
+                          // Move logic
+                          // 1. Add to player
+                          const newItem = { ...item, x, y };
+                          currentPlayerGrid = placeItemInGrid(currentPlayerGrid, newItem, x, y);
+                          currentPlayerItems.push(newItem);
+                          
+                          // 2. Remove from loot
+                          currentLootGrid = removeItemFromGrid(currentLootGrid, item.id);
+                          currentLootItems = currentLootItems.filter(i => i.id !== item.id);
+                          
+                          placed = true;
+                          changed = true;
+                          break;
+                      }
+                  }
+              }
+          }
+      }
+
+      if (changed) {
+          setInventory({ ...inventory, items: currentPlayerItems, grid: currentPlayerGrid });
+          setLootItems(currentLootItems);
+          setLootGrid(currentLootGrid);
+      }
+  };
+
+  const completeSearch = (itemId: string) => {
+      // Find item in loot or player
+      const updateList = (items: GridItem[]) => items.map(item => {
+          if (item.id === itemId && item.originalShape) {
+               // Restore Shape
+               return { ...item, isIdentified: true, shape: item.originalShape };
+          }
+          return item;
+      });
+
+      setLootItems(prev => {
+          const updated = updateList(prev);
+          rebuildLootGrid(updated);
+          return updated;
+      });
+      
+      setInventory(prev => {
+          const updated = updateList(prev.items);
+          const newGrid = rebuildGrid(updated, prev.width, prev.height);
+          return { ...prev, items: updated, grid: newGrid };
+      });
+
+      // Feedback Animation Trigger
+      setSearchingItemId(null);
+      setJustRevealedId(itemId);
+      
+      setTimeout(() => {
+          setJustRevealedId(null);
+      }, 800);
+  };
+
+  const rebuildGrid = (items: GridItem[], w: number, h: number) => {
+      let g = createEmptyGrid(w, h);
+      items.forEach(i => {
+          // FIX: Pass rotation: 0 because 'i.shape' is already rotated in state.
+          // This prevents double-rotation in placeItemInGrid which caused the crash.
+          const itemForPlacement = { ...i, rotation: 0 as const };
+          if (canPlaceItem(g, itemForPlacement, i.x, i.y, 0)) { 
+              g = placeItemInGrid(g, itemForPlacement, i.x, i.y);
+          }
+      });
+      return g;
+  };
+
+  const rebuildLootGrid = (items: GridItem[]) => {
+      const g = rebuildGrid(items, CONTAINER_WIDTH, CONTAINER_HEIGHT);
+      setLootGrid(g);
+  };
+
+  // --- DRAG & DROP LOGIC ---
+
+  const handlePointerDown = (e: React.PointerEvent, item: GridItem, sourceGrid: 'PLAYER' | 'LOOT') => {
+      // Allow scrolling for unidentified items (don't prevent default)
+      if (item.isIdentified) {
+          e.preventDefault();
+      }
+
+      // Lock check: In combat, we ALLOW selection (click), but we will BLOCK dragging in pointerMove
+      if (searchingItemId !== null) return; // Busy
+
+      const rect = e.currentTarget.getBoundingClientRect();
+      const offsetX = e.clientX - rect.left;
+      const offsetY = e.clientY - rect.top;
+
+      setDragState({
+          item,
+          sourceGrid,
+          originalX: item.x,
+          originalY: item.y,
+          startX: e.clientX,
+          startY: e.clientY,
+          currentX: e.clientX,
+          currentY: e.clientY,
+          grabOffsetX: offsetX,
+          grabOffsetY: offsetY,
+          isDragging: false
+      });
+  };
+
+  // Calculate Target Cell logic extracted for reuse in Move and Preview
+  const calculateTargetCell = (clientX: number, clientY: number, grabOffsetX: number, grabOffsetY: number, gridRect: DOMRect, gridW: number, gridH: number) => {
+      const stride = CELL_SIZE + CELL_GAP;
+      const relativeX = clientX - gridRect.left - grabOffsetX; 
+      const relativeY = clientY - gridRect.top - grabOffsetY;
+      
+      const cellX = Math.max(0, Math.min(Math.round(relativeX / stride), gridW - 1));
+      const cellY = Math.max(0, Math.min(Math.round(relativeY / stride), gridH - 1));
+      
+      return { cellX, cellY };
+  };
+
+  useEffect(() => {
+      const handlePointerMove = (e: PointerEvent) => {
+          if (!dragState) return;
+          
+          // Combat Logic: Lock movement/drag, but allow selection (click)
+          if (isCombat) return;
+
+          // Unidentified items CANNOT be dragged
+          if (!dragState.item.isIdentified) return;
+
+          const dist = Math.hypot(e.clientX - dragState.startX, e.clientY - dragState.startY);
+          const isDragging = dragState.isDragging || dist > 5;
+          
+          setDragState(prev => prev ? ({
+              ...prev,
+              currentX: e.clientX,
+              currentY: e.clientY,
+              isDragging
+          }) : null);
+
+          // --- SMART PREVIEW LOGIC ---
+          if (isDragging) {
+              const playerRect = playerGridRef.current?.getBoundingClientRect();
+              const lootRect = lootGridRef.current?.getBoundingClientRect();
+
+              let targetGridType: 'PLAYER' | 'LOOT' | null = null;
+              let gridRect = null;
+              let gridItems: GridItem[] = [];
+              let gW = 0; 
+              let gH = 0;
+
+              if (playerRect && e.clientX >= playerRect.left && e.clientX <= playerRect.right && e.clientY >= playerRect.top && e.clientY <= playerRect.bottom) {
+                  targetGridType = 'PLAYER';
+                  gridRect = playerRect;
+                  gridItems = inventory.items;
+                  gW = INVENTORY_WIDTH; gH = INVENTORY_HEIGHT;
+              } else if (lootRect && e.clientX >= lootRect.left && e.clientX <= lootRect.right && e.clientY >= lootRect.top && e.clientY <= lootRect.bottom) {
+                  targetGridType = 'LOOT';
+                  gridRect = lootRect;
+                  gridItems = lootItems;
+                  gW = CONTAINER_WIDTH; gH = CONTAINER_HEIGHT;
+              }
+
+              if (targetGridType && gridRect) {
+                   const { cellX, cellY } = calculateTargetCell(e.clientX, e.clientY, dragState.grabOffsetX, dragState.grabOffsetY, gridRect, gW, gH);
+                   
+                   // Check collision with standard logic first
+                   // Remove dragging item from grid simulation
+                   let tempItems = gridItems;
+                   if (dragState.sourceGrid === targetGridType) {
+                       tempItems = gridItems.filter(i => i.id !== dragState.item.id);
+                   }
+                   
+                   const tempGrid = rebuildGrid(tempItems, gW, gH);
+                   const itemForCheck = { ...dragState.item, rotation: 0 as const };
+                   
+                   if (!canPlaceItem(tempGrid, itemForCheck, cellX, cellY, 0)) {
+                        // Collision detected! Try Smart Arrange
+                        const rearrangement = findSmartArrangement(tempItems, itemForCheck, cellX, cellY, gW, gH);
+                        
+                        if (rearrangement) {
+                            setSmartPreview({
+                                targetGrid: targetGridType,
+                                movedItems: rearrangement
+                            });
+                            return;
+                        }
+                   }
+              }
+              // If no valid smart preview found (or no collision), clear it
+              setSmartPreview(null);
+          }
+      };
+
+      const handlePointerUp = (e: PointerEvent) => {
+          if (!dragState) return;
+
+          if (!dragState.isDragging) {
+              // Click Event (works for both identified and unidentified)
+              setSelectedItem(dragState.item);
+              // Trigger Identity if not identified
+              if (!dragState.item.isIdentified) {
+                  handleSearchItem(dragState.item);
+              }
+          } else {
+              // Drop Event
+              handleDrop(e, dragState);
+          }
+          setDragState(null);
+          setSmartPreview(null);
+      };
+
+      const handlePointerCancel = () => {
+          setDragState(null);
+          setSmartPreview(null);
+      };
+
+      window.addEventListener('pointermove', handlePointerMove);
+      window.addEventListener('pointerup', handlePointerUp);
+      window.addEventListener('pointercancel', handlePointerCancel);
+      return () => {
+          window.removeEventListener('pointermove', handlePointerMove);
+          window.removeEventListener('pointerup', handlePointerUp);
+          window.removeEventListener('pointercancel', handlePointerCancel);
+      };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragState, smartPreview]); // Added smartPreview dep to ensure updates trigger if needed, though state setter is enough
+
+  const handleDrop = (e: PointerEvent, state: NonNullable<typeof dragState>) => {
+      // Determine target grid
+      const playerRect = playerGridRef.current?.getBoundingClientRect();
+      const lootRect = lootGridRef.current?.getBoundingClientRect();
+
+      let targetGridType: 'PLAYER' | 'LOOT' | null = null;
+      let gridRect = null;
+      let gridData = null;
+      let targetItemsList: GridItem[] = [];
+      let gridW = 0;
+      let gridH = 0;
+
+      if (playerRect && 
+          e.clientX >= playerRect.left && e.clientX <= playerRect.right &&
+          e.clientY >= playerRect.top && e.clientY <= playerRect.bottom) {
+          targetGridType = 'PLAYER';
+          gridRect = playerRect;
+          gridData = inventory.grid;
+          targetItemsList = inventory.items;
+          gridW = INVENTORY_WIDTH;
+          gridH = INVENTORY_HEIGHT;
+      } else if (lootRect && 
+          e.clientX >= lootRect.left && e.clientX <= lootRect.right &&
+          e.clientY >= lootRect.top && e.clientY <= lootRect.bottom) {
+          targetGridType = 'LOOT';
+          gridRect = lootRect;
+          gridData = lootGrid;
+          targetItemsList = lootItems;
+          gridW = CONTAINER_WIDTH;
+          gridH = CONTAINER_HEIGHT;
+      }
+
+      if (targetGridType && gridRect) {
+          const { cellX, cellY } = calculateTargetCell(e.clientX, e.clientY, state.grabOffsetX, state.grabOffsetY, gridRect, gridW, gridH);
+
+          // Logic
+          // 1. Remove from source temporarily to check placement
+          let tempTargetGrid = gridData;
+          if (state.sourceGrid === targetGridType) {
+              tempTargetGrid = removeItemFromGrid(gridData, state.item.id);
+          }
+          
+          // 2. CHECK FOR STACKING (Collision with Identical Consumable)
+          let collisionItem: GridItem | null = null;
+          if (cellX >= 0 && cellY >= 0 && cellY < gridData.length && cellX < gridData[0].length) {
+              const targetId = tempTargetGrid[cellY][cellX];
+              if (targetId) {
+                  collisionItem = targetItemsList.find(i => i.id === targetId) || null;
+              }
+          }
+
+          if (collisionItem && 
+              collisionItem.type === 'CONSUMABLE' && 
+              state.item.type === 'CONSUMABLE' &&
+              collisionItem.name === state.item.name &&
+              collisionItem.id !== state.item.id) {
+              mergeItems(state.item, collisionItem, state.sourceGrid, targetGridType);
+              return;
+          }
+
+          // 3. Check Placement OR Smart Arrange
+          const itemForCheck = { ...state.item, rotation: 0 as const };
+
+          // Standard Place
+          if (canPlaceItem(tempTargetGrid, itemForCheck, cellX, cellY, 0)) {
+               moveItem(state.item, state.sourceGrid, targetGridType, cellX, cellY);
+               return;
+          }
+
+          // Smart Arrange Commit
+          if (smartPreview && smartPreview.targetGrid === targetGridType) {
+              // Apply the moves in smartPreview.movedItems first
+              // then place the dragged item
+              commitSmartArrange(state.item, state.sourceGrid, targetGridType, cellX, cellY, smartPreview.movedItems);
+              return;
+          }
+      }
+  };
+
+  const commitSmartArrange = (
+      draggedItem: GridItem, 
+      sourceGrid: 'PLAYER' | 'LOOT', 
+      targetGrid: 'PLAYER' | 'LOOT', 
+      targetX: number, 
+      targetY: number, 
+      movedItems: GridItem[]
+  ) => {
+      // 1. Get the list of items for the target grid
+      let currentItems = targetGrid === 'PLAYER' ? [...inventory.items] : [...lootItems];
+
+      // 2. Remove dragged item from source if it was in the same grid (to avoid duplication logic issues)
+      if (sourceGrid === targetGrid) {
+          currentItems = currentItems.filter(i => i.id !== draggedItem.id);
+      } else {
+          // If cross-grid, remove from source grid now
+           if (sourceGrid === 'PLAYER') {
+              setInventory(prev => {
+                  const items = prev.items.filter(i => i.id !== draggedItem.id);
+                  return { ...prev, items, grid: rebuildGrid(items, prev.width, prev.height) };
+              });
+           } else {
+              setLootItems(prev => {
+                  const items = prev.filter(i => i.id !== draggedItem.id);
+                  rebuildLootGrid(items);
+                  return items;
+              });
+           }
+      }
+
+      // 3. Update coordinates of displaced items in the list
+      const movedMap = new Map(movedItems.map(i => [i.id, i]));
+      const updatedItems = currentItems.map(item => {
+          if (movedMap.has(item.id)) {
+              return movedMap.get(item.id)!;
+          }
+          return item;
+      });
+
+      // 4. Add the dragged item to the list at new pos
+      const newItem = { ...draggedItem, x: targetX, y: targetY, rotation: 0 as const };
+      updatedItems.push(newItem);
+
+      // 5. Commit to State
+      if (targetGrid === 'PLAYER') {
+          setInventory(prev => ({ ...prev, items: updatedItems, grid: rebuildGrid(updatedItems, prev.width, prev.height) }));
+      } else {
+          setLootItems(updatedItems);
+          rebuildLootGrid(updatedItems);
+      }
+      setSelectedItem(newItem);
+  };
+
+  const mergeItems = (sourceItem: GridItem, targetItem: GridItem, sourceGrid: 'PLAYER' | 'LOOT', targetGrid: 'PLAYER' | 'LOOT') => {
+      const quantityToAdd = sourceItem.quantity || 1;
+      
+      // Update Target Grid (Where targetItem lives)
+      const updateTargetFn = (prevItems: GridItem[]) => prevItems.map(i => {
+          if (i.id === targetItem.id) {
+              return { ...i, quantity: (i.quantity || 1) + quantityToAdd };
+          }
+          return i;
+      });
+
+      if (targetGrid === 'PLAYER') {
+          setInventory(prev => ({ ...prev, items: updateTargetFn(prev.items) }));
+      } else {
+          setLootItems(prev => updateTargetFn(prev));
+      }
+
+      // Remove Source Item
+      if (sourceGrid === 'PLAYER') {
+          setInventory(prev => {
+              const newItems = prev.items.filter(i => i.id !== sourceItem.id);
+              const newGrid = removeItemFromGrid(prev.grid, sourceItem.id);
+              return { ...prev, items: newItems, grid: newGrid };
+          });
+      } else {
+          setLootItems(prev => {
+              const newItems = prev.filter(i => i.id !== sourceItem.id);
+              const newGrid = removeItemFromGrid(lootGrid, sourceItem.id);
+              setLootGrid(newGrid); // Ensure grid updates
+              return newItems;
+          });
+      }
+      setSelectedItem(null);
+  };
+
+  const moveItem = (item: GridItem, source: 'PLAYER' | 'LOOT', target: 'PLAYER' | 'LOOT', x: number, y: number) => {
+      const newItem = { ...item, x, y };
+      
+      // Update Source List
+      if (source === 'PLAYER') {
+          const newItems = inventory.items.filter(i => i.id !== item.id);
+          const newGrid = removeItemFromGrid(inventory.grid, item.id);
+          setInventory({ ...inventory, items: newItems, grid: newGrid });
+      } else {
+          const newItems = lootItems.filter(i => i.id !== item.id);
+          const newGrid = removeItemFromGrid(lootGrid, item.id);
+          setLootItems(newItems);
+          setLootGrid(newGrid);
+      }
+
+      // Add to Target List (Logic allows cross-moving if grids update sequentially in state)
+      
+      if (source === target) {
+          // Same Grid Move
+          if (target === 'PLAYER') {
+             setInventory(prev => {
+                 const without = prev.items.filter(i => i.id !== item.id);
+                 const gridWithout = removeItemFromGrid(prev.grid, item.id);
+                 // Place
+                 const itemForPlacement = { ...newItem, rotation: 0 as const };
+                 const gridWith = placeItemInGrid(gridWithout, itemForPlacement, x, y);
+                 return { ...prev, items: [...without, newItem], grid: gridWith };
+             });
+          } else {
+             setLootItems(prev => {
+                 const without = prev.filter(i => i.id !== item.id);
+                 return [...without, newItem];
+             });
+             setLootGrid(prev => {
+                 const gridWithout = removeItemFromGrid(prev, item.id);
+                 const itemForPlacement = { ...newItem, rotation: 0 as const };
+                 return placeItemInGrid(gridWithout, itemForPlacement, x, y);
+             });
+          }
+      } else {
+          // Cross Grid Move
+          if (target === 'PLAYER') {
+              setInventory(prev => {
+                  const itemForPlacement = { ...newItem, rotation: 0 as const };
+                  const gridWith = placeItemInGrid(prev.grid, itemForPlacement, x, y);
+                  return { ...prev, items: [...prev.items, newItem], grid: gridWith };
+              });
+          } else {
+               setLootItems(prev => [...prev, newItem]);
+               setLootGrid(prev => {
+                   const itemForPlacement = { ...newItem, rotation: 0 as const };
+                   return placeItemInGrid(prev, itemForPlacement, x, y);
+               });
+          }
+      }
+      
+      setSelectedItem(newItem); // Keep selection
+  };
+
+  // --- ACTIONS ---
+  const handleRotate = () => {
+    if (!selectedItem || isCombat) return;
+    
+    // 1. Calculate new rotation/shape
+    const nextRot = (selectedItem.rotation + 90) % 360 as 0 | 90 | 180 | 270;
+    const newShape = rotateMatrix(selectedItem.shape);
+    const newOriginalShape = selectedItem.originalShape ? rotateMatrix(selectedItem.originalShape) : undefined;
+    
+    // 2. Prepare grid environment
+    const isPlayerInventory = inventory.items.some(i => i.id === selectedItem.id);
+    const gridData = isPlayerInventory ? inventory.grid : lootGrid;
+    
+    // Remove self from grid temporarily to allow rotation in place
+    const tempGrid = removeItemFromGrid(gridData, selectedItem.id);
+    // IMPORTANT: rotation: 0 used for checks because shape is manually rotated
+    const tempItem = { ...selectedItem, shape: newShape, rotation: 0 as const };
+    
+    // 3. SMART ROTATION (Wall Kicks with extended range)
+    // Try original position first, then try offsets (up, left, right, down, diagonals)
+    const offsets = [
+        [0, 0],   // Center
+        [-1, 0],  // Left
+        [1, 0],   // Right
+        [0, -1],  // Up
+        [0, 1],   // Down
+        [-1, -1], // Up-Left
+        [1, -1],  // Up-Right
+        [-1, 1],  // Down-Left
+        [1, 1],   // Down-Right
+        [-2, 0], [2, 0], [0, -2], [0, 2] // Extra range
+    ];
+
+    let foundX = -1;
+    let foundY = -1;
+
+    for (const [dx, dy] of offsets) {
+        const testX = selectedItem.x + dx;
+        const testY = selectedItem.y + dy;
+        
+        if (canPlaceItem(tempGrid, tempItem, testX, testY, 0)) {
+            foundX = testX;
+            foundY = testY;
+            break;
+        }
+    }
+
+    if (foundX !== -1) {
+        // Apply Rotation at found coordinates
+        // Store the NEW shape and the NEW rotation value for persistence, but shape is source of truth for visuals.
+        const updateItem = (i: GridItem) => i.id === selectedItem.id ? { ...i, rotation: nextRot, shape: newShape, originalShape: newOriginalShape, x: foundX, y: foundY } : i;
+        
+        if (isPlayerInventory) {
+             setInventory(prev => {
+                 const updatedItems = prev.items.map(updateItem);
+                 const updatedGrid = rebuildGrid(updatedItems, prev.width, prev.height);
+                 return { ...prev, items: updatedItems, grid: updatedGrid };
+             });
+        } else {
+             setLootItems(prev => {
+                 const updatedItems = prev.map(updateItem);
+                 rebuildLootGrid(updatedItems);
+                 return updatedItems;
+             });
+        }
+        setSelectedItem(prev => prev ? { ...prev, rotation: nextRot, shape: newShape, originalShape: newOriginalShape, x: foundX, y: foundY } : null);
+    }
+  };
+
+  const handleTrash = () => {
+     if (!selectedItem || isCombat) return;
+     // Remove
+     if (inventory.items.some(i => i.id === selectedItem.id)) {
+         setInventory(prev => {
+             const newItems = prev.items.filter(i => i.id !== selectedItem.id);
+             const newGrid = removeItemFromGrid(prev.grid, selectedItem.id);
+             return { ...prev, items: newItems, grid: newGrid };
+         });
+     } else {
+         setLootItems(prev => {
+             const newItems = prev.filter(i => i.id !== selectedItem.id);
+             rebuildLootGrid(newItems);
+             return newItems;
+         });
+     }
+     setSelectedItem(null);
+  };
+
+  const handleUseItem = () => {
+      if (selectedItem && selectedItem.type === 'CONSUMABLE' && onConsume) {
+          onConsume(selectedItem);
+
+          // Remove Logic with Stacking Support
+          const removeFromList = (items: GridItem[]) => {
+              return items.map(i => {
+                  if (i.id === selectedItem.id) {
+                      return { ...i, quantity: (i.quantity || 1) - 1 };
+                  }
+                  return i;
+              }).filter(i => (i.quantity || 0) > 0);
+          };
+
+          if (inventory.items.some(i => i.id === selectedItem.id)) {
+              setInventory(prev => {
+                  const newItems = removeFromList(prev.items);
+                  // Rebuild grid completely to reflect removal/update
+                  const newGrid = rebuildGrid(newItems, prev.width, prev.height);
+                  return { ...prev, items: newItems, grid: newGrid };
+              });
+              // Update selected item if it still exists (quantity > 0)
+              if ((selectedItem.quantity || 1) > 1) {
+                  setSelectedItem(prev => prev ? { ...prev, quantity: (prev.quantity || 1) - 1 } : null);
+              } else {
+                  setSelectedItem(null);
+              }
+          } else if (lootItems.some(i => i.id === selectedItem.id)) {
+               setLootItems(prev => {
+                   const newItems = removeFromList(prev);
+                   rebuildLootGrid(newItems);
+                   return newItems;
+               });
+               if ((selectedItem.quantity || 1) > 1) {
+                   setSelectedItem(prev => prev ? { ...prev, quantity: (prev.quantity || 1) - 1 } : null);
+               } else {
+                   setSelectedItem(null);
+               }
+          }
+      }
+  };
+
+  // --- RENDERING ---
+  const renderCell = (x: number, y: number, gridType: 'PLAYER' | 'LOOT', gridData: (string|null)[][], itemsList: GridItem[]) => {
+      const itemId = gridData[y][x];
+      
+      // Check if this item is currently being "Ghost Moved" by the smart preview
+      let isGhostMoving = false;
+      let displayItem = itemId ? itemsList.find(i => i.id === itemId) : null;
+      
+      if (smartPreview && smartPreview.targetGrid === gridType && displayItem) {
+          // If this item is part of the moved set, we hide the original
+          if (smartPreview.movedItems.some(i => i.id === displayItem?.id)) {
+              displayItem = null; // Hide it here, we will render it as a ghost later
+          }
+      }
+
+      // Check if this cell is occupied by a "Ghost Moved" item
+      let ghostMovedItem = null;
+      if (smartPreview && smartPreview.targetGrid === gridType) {
+          // Find if any moved item occupies (x,y)
+          ghostMovedItem = smartPreview.movedItems.find(i => {
+              const dx = x - i.x;
+              const dy = y - i.y;
+              if (dx >= 0 && dy >= 0 && dy < i.shape.length && dx < i.shape[0].length) {
+                  return i.shape[dy][dx] === 1;
+              }
+              return false;
+          });
+      }
+
+      const item = displayItem;
+      const isDraggingThis = dragState && dragState.item.id === itemId && dragState.isDragging;
+      const isSelected = selectedItem && item && selectedItem.id === item.id;
+      const isTopLeft = item && item.x === x && item.y === y;
+      const isGhostTopLeft = ghostMovedItem && ghostMovedItem.x === x && ghostMovedItem.y === y;
+
+      // SAFE ZONE in STORAGE AREA (Left Half of Backpack)
+      const isSafeZone = gridType === 'PLAYER' && x < SAFE_ZONE_WIDTH && y >= EQUIPMENT_ROW_COUNT;
+      const isEquipmentZone = gridType === 'PLAYER' && y < EQUIPMENT_ROW_COUNT;
+      const isBottomRowOfEquipment = gridType === 'PLAYER' && y === EQUIPMENT_ROW_COUNT - 1;
+
+      // Drag Ghost (Where the user's cursor is trying to place)
+      let isGhost = false;
+      let isGhostValid = false;
+      
+      if (dragState && dragState.isDragging && gridType === activeGhostGrid) {
+           const rect = gridType === 'PLAYER' ? playerGridRef.current?.getBoundingClientRect() : lootGridRef.current?.getBoundingClientRect();
+           if (rect) {
+               const stride = CELL_SIZE + CELL_GAP;
+               const relativeX = dragState.currentX - rect.left - dragState.grabOffsetX;
+               const relativeY = dragState.currentY - rect.top - dragState.grabOffsetY;
+               
+               // Get Grid Dimensions based on Type
+               const gH = gridType === 'PLAYER' ? INVENTORY_HEIGHT : CONTAINER_HEIGHT;
+               const gW = gridType === 'PLAYER' ? INVENTORY_WIDTH : CONTAINER_WIDTH;
+
+               // Apply exact same stride & clamping logic as drop for consistency
+               const cellX = Math.max(0, Math.min(Math.round(relativeX / stride), gW - 1));
+               const cellY = Math.max(0, Math.min(Math.round(relativeY / stride), gH - 1));
+               
+               const dx = x - cellX;
+               const dy = y - cellY;
+               if (dx >= 0 && dy >= 0 && dy < dragState.item.shape.length && dx < dragState.item.shape[0].length) {
+                   if (dragState.item.shape[dy][dx] === 1) {
+                       isGhost = true;
+                       
+                       // Validity Logic
+                       // 1. If Smart Preview Active -> Always Valid (Blue/Green)
+                       // 2. Else -> Check normal valid
+                       if (smartPreview && smartPreview.targetGrid === gridType) {
+                           isGhostValid = true;
+                       } else {
+                           let tempGrid = gridData;
+                           if (dragState.sourceGrid === gridType) tempGrid = removeItemFromGrid(gridData, dragState.item.id);
+                           const itemForCheck = { ...dragState.item, rotation: 0 as const };
+                           isGhostValid = canPlaceItem(tempGrid, itemForCheck, cellX, cellY, 0);
+
+                           // Consumable Stack Check
+                           if (!isGhostValid && dragState.item.type === 'CONSUMABLE') {
+                                const tId = gridData[y][x];
+                                if (tId && tId !== dragState.item.id) {
+                                    const tItem = itemsList.find(i => i.id === tId);
+                                    if (tItem && tItem.name === dragState.item.name && tItem.type === 'CONSUMABLE') {
+                                        isGhostValid = true;
+                                    }
+                                }
+                           }
+                       }
+                   }
+               }
+           }
+      }
+
+      // Visuals for Item
+      let content = null;
+      if (item && !isDraggingThis) {
+          const isSearching = item.id === searchingItemId;
+          const isPending = !item.isIdentified && !isSearching;
+          const isJustRevealed = item.id === justRevealedId;
+          
+          let rarityFlashClass = 'bg-cyan-400 shadow-[0_0_50px_rgba(34,211,238,0.8)]'; 
+          if (item.rarity === 'RARE') rarityFlashClass = 'bg-purple-500 shadow-[0_0_50px_rgba(168,85,247,0.8)]';
+          if (item.rarity === 'LEGENDARY') rarityFlashClass = 'bg-yellow-400 shadow-[0_0_50px_rgba(250,204,21,0.8)]';
+
+          const r = y - item.y;
+          const c = x - item.x;
+          const borderStyle = getSmartBorders(item.shape, r, c);
+          
+          content = (
+              <div 
+                className={`
+                    absolute inset-0 z-10 cursor-grab active:cursor-grabbing overflow-visible
+                    ${item.isIdentified ? 'touch-none transition-transform duration-200' : ''} 
+                    ${isSelected ? 'ring-1 ring-white/80 z-20' : ''} 
+                    ${isPending ? 'bg-[url("https://www.transparenttextures.com/patterns/carbon-fibre.png")] bg-fixed' : ''}
+                    ${item.isIdentified ? item.color.replace('border ', '') : 'bg-stone-900 border-stone-600'} 
+                `}
+                style={{
+                    ...borderStyle,
+                    borderColor: !item.isIdentified ? 'rgba(87, 83, 78, 0.6)' : undefined 
+                }}
+                onPointerDown={(e) => handlePointerDown(e, item, gridType)}
+              >
+                  {!item.isIdentified && (
+                       <div className="w-full h-full relative flex items-center justify-center">
+                           <div className="absolute inset-0 bg-noise opacity-20 animate-hologram"></div>
+                           {isSearching && (
+                               <>
+                                   <div className="absolute inset-0 bg-dungeon-gold/10"></div>
+                                   <div className="absolute w-full h-1 bg-dungeon-gold/80 shadow-[0_0_10px_#a16207] animate-scan-line z-20"></div>
+                               </>
+                           )}
+                       </div>
+                  )}
+                  
+                  {isTopLeft && !item.isIdentified && (
+                        <div 
+                            className="absolute z-50 flex items-center justify-center pointer-events-auto"
+                            style={{
+                                top: '-1px', left: '-1px',
+                                width: `${item.shape[0].length * CELL_SIZE + (item.shape[0].length - 1) * CELL_GAP}px`,
+                                height: `${item.shape.length * CELL_SIZE + (item.shape.length - 1) * CELL_GAP}px`
+                            }}
+                            onClick={() => handleSearchItem(item)}
+                        >
+                            {!isSearching && (
+                                <button 
+                                    className="bg-black/80 p-1.5 rounded-full border border-stone-500/50 backdrop-blur-sm shadow-xl animate-pulse z-50 hover:scale-110 hover:border-dungeon-gold transition-all"
+                                    style={{ transform: (item.shape.length === 1 && item.shape[0].length === 1) ? 'scale(0.85)' : 'scale(1)' }}
+                                >
+                                    <LucideScanLine size={18} className="text-dungeon-gold" />
+                                </button>
+                            )}
+                            {isSearching && (
+                                <div className="absolute bottom-2 text-[8px] font-mono text-dungeon-gold animate-pulse bg-black/70 px-2 py-0.5 rounded border border-dungeon-gold/30">
+                                    DECODING...
+                                </div>
+                            )}
+                        </div>
+                  )}
+
+                  {isTopLeft && item.isIdentified && (item.quantity || 1) > 1 && (
+                      <div className="absolute -bottom-1 -right-1 z-30 bg-black/80 text-stone-200 text-[10px] font-bold px-1 rounded-tl-sm border-l border-t border-stone-600 font-mono shadow-md">
+                          x{item.quantity}
+                      </div>
+                  )}
+
+                  {isJustRevealed && isTopLeft && (
+                       <div 
+                            className="absolute top-0 left-0 z-[60] flex items-center justify-center pointer-events-none"
+                            style={{
+                                width: `${item.shape[0].length * CELL_SIZE + (item.shape[0].length - 1) * CELL_GAP}px`,
+                                height: `${item.shape.length * CELL_SIZE + (item.shape.length - 1) * CELL_GAP}px`
+                            }}
+                       >
+                            <div className={`absolute inset-0 ${rarityFlashClass} animate-flash-white opacity-60`}></div>
+                            <div className={`absolute inset-0 border-4 ${item.rarity === 'LEGENDARY' ? 'border-yellow-200' : 'border-white/50'} animate-ping rounded-sm`}></div>
+                       </div>
+                  )}
+                  {isCombat && gridType === 'PLAYER' && <div className="absolute inset-0 bg-black/50 flex items-center justify-center"><LucideLock size={12} className="text-red-500"/></div>}
+              </div>
+          );
+      }
+
+      // RENDER GHOST MOVED ITEM (Blue Transparency)
+      let ghostContent = null;
+      if (ghostMovedItem) {
+           const r = y - ghostMovedItem.y;
+           const c = x - ghostMovedItem.x;
+           const borderStyle = getSmartBorders(ghostMovedItem.shape, r, c);
+           const colorClass = ghostMovedItem.isIdentified ? ghostMovedItem.color : 'bg-stone-900 border-stone-600';
+           const baseColor = colorClass.split(' ')[0]; // Basic extraction
+           
+           ghostContent = (
+               <div 
+                  className={`absolute inset-0 z-0 opacity-40 border border-dashed border-cyan-400 bg-cyan-900/30 transition-all duration-200 pointer-events-none`}
+                  style={{ ...borderStyle }}
+               >
+               </div>
+           );
+      }
+
+      return (
+          <div 
+             key={`${x}-${y}`} 
+             className={`
+                w-9 h-9 border relative select-none
+                ${isTopLeft || isGhostTopLeft ? 'z-40' : 'z-0'} 
+                ${isSafeZone ? 'bg-dungeon-gold/5 border-dungeon-gold/20' : isEquipmentZone ? 'bg-[#1a1a1a] border-stone-800' : 'bg-black/80 border-stone-900'}
+                ${isBottomRowOfEquipment ? 'border-b-4 border-b-black mb-1' : ''}
+             `}
+          >
+              {isSafeZone && !item && x===0 && y===EQUIPMENT_ROW_COUNT && <LucideShieldCheck size={16} className="absolute top-1 left-1 text-dungeon-gold/20" />}
+              {content}
+              {ghostContent}
+              {isGhost && (
+                  <div className={`absolute inset-0 z-30 ${isGhostValid ? 'bg-emerald-500/40 border border-emerald-400' : 'bg-red-500/40 border border-red-400'}`}></div>
+              )}
+          </div>
+      );
+  };
+
+  return (
+    <div className="w-full h-full flex flex-col bg-dungeon-black text-stone-300 relative font-serif animate-fade-in touch-none overflow-hidden">
+      
+      <div className="absolute inset-0 bg-noise opacity-5 pointer-events-none"></div>
+
+      {/* Main Container - Scrollable if content too tall */}
+      <div className="flex-1 flex flex-col w-full h-full overflow-y-auto">
+
+        {/* LOOT SECTION */}
+        {isLootPhase && (
+            <div className="flex-1 flex flex-col items-center justify-center p-4 relative min-h-[280px] border-b-4 border-stone-800 bg-stone-950/80">
+                {!isBoxOpen ? (
+                    <div className="flex flex-col items-center cursor-pointer group animate-float" onClick={() => setIsBoxOpen(true)}>
+                        <LucideBox size={80} strokeWidth={1} className="text-stone-600 group-hover:text-dungeon-gold transition-colors fill-stone-900" />
+                        <div className="mt-4 text-sm font-display font-bold text-stone-500 group-hover:text-dungeon-gold tracking-widest bg-black px-6 py-2 border border-stone-700 group-hover:border-dungeon-gold shadow-lg transition-all">
+                            搜索残骸
+                        </div>
+                    </div>
+                ) : (
+                    <div className="w-full max-w-[340px] flex flex-col items-center">
+                        <div className="flex justify-between w-full mb-3 px-1 border-b border-stone-800 pb-2">
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-dungeon-gold font-display uppercase tracking-widest flex items-center gap-1">
+                                    <LucideBox size={14} /> 战利品箱
+                                </span>
+                                {searchingItemId && <span className="text-[10px] text-stone-500 animate-pulse">正在解码...</span>}
+                            </div>
+                            
+                            <div className="flex gap-2">
+                                {/* Test Button */}
+                                <button 
+                                    onClick={handleAddTestLoot}
+                                    className="flex items-center gap-1 text-[10px] bg-stone-800 hover:bg-stone-700 text-stone-400 px-2 py-1 rounded border border-stone-600"
+                                >
+                                    <LucidePlus size={12} /> 测试
+                                </button>
+                                {/* Take All Button */}
+                                {lootItems.some(i => i.isIdentified) && (
+                                    <button 
+                                        onClick={handleTakeAll}
+                                        className="flex items-center gap-1 text-[10px] bg-stone-800 hover:bg-stone-700 text-dungeon-gold px-2 py-1 rounded border border-stone-600"
+                                    >
+                                        <LucideGrab size={12} /> 全部拾取
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                        
+                        <div className="relative p-1 bg-gradient-to-b from-stone-800 to-black rounded-sm border border-stone-700 shadow-inner">
+                            <div className="absolute top-0 left-0 w-2 h-2 border-t border-l border-stone-500"></div>
+                            <div className="absolute top-0 right-0 w-2 h-2 border-t border-r border-stone-500"></div>
+                            <div className="absolute bottom-0 left-0 w-2 h-2 border-b border-l border-stone-500"></div>
+                            <div className="absolute bottom-0 right-0 w-2 h-2 border-b border-r border-stone-500"></div>
+                            
+                            <div 
+                                ref={lootGridRef}
+                                className="grid gap-1 bg-black/80"
+                                style={{ gridTemplateColumns: `repeat(${CONTAINER_WIDTH}, minmax(0, 1fr))` }}
+                            >
+                                {Array.from({length: CONTAINER_HEIGHT}).map((_, y) => 
+                                    Array.from({length: CONTAINER_WIDTH}).map((_, x) => renderCell(x, y, 'LOOT', lootGrid, lootItems))
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+        )}
+
+        {/* PLAYER SECTION */}
+        <div className={`w-full bg-dungeon-dark border-t-2 border-stone-800 z-30 shrink-0 flex flex-col shadow-[0_-10px_50px_rgba(0,0,0,0.8)] pb-12 pt-2 ${!isLootPhase ? 'h-full justify-center' : ''}`}>
+            
+            {/* Info / Action Bar */}
+            <div className="min-h-[48px] px-4 py-2 bg-black/40 border-b border-stone-800 mb-2 flex items-center justify-between">
+                {selectedItem ? (
+                    <div className="flex items-center justify-between w-full gap-2">
+                        <div className="flex flex-col overflow-hidden">
+                            <span className={`text-xs font-bold font-display truncate ${selectedItem.rarity === 'LEGENDARY' ? 'text-dungeon-gold' : selectedItem.rarity === 'RARE' ? 'text-purple-400' : 'text-stone-300'}`}>
+                                {selectedItem.isIdentified ? selectedItem.name : (searchingItemId === selectedItem.id ? '解析中...' : '未知物体')}
+                            </span>
+                            <div className="flex items-center gap-2">
+                                <span className="text-[10px] text-stone-500 truncate">{selectedItem.isIdentified ? TYPE_LABELS[selectedItem.type] : '接触以鉴定'}</span>
+                                {selectedItem.quantity && selectedItem.quantity > 1 && (
+                                    <span className="text-[10px] text-stone-300 bg-stone-800 px-1 rounded">x{selectedItem.quantity}</span>
+                                )}
+                            </div>
+                        </div>
+                        
+                        <div className="flex gap-2 shrink-0">
+                            {selectedItem.isIdentified ? (
+                                <>
+                                    {selectedItem.type === 'CONSUMABLE' && (
+                                        <button onClick={handleUseItem} className="p-2 bg-green-900/50 text-green-400 border border-green-700 rounded hover:bg-green-900"><LucideZap size={14}/></button>
+                                    )}
+                                    <button onClick={() => setSelectedItem(selectedItem)} className="p-2 bg-stone-800 text-stone-300 border border-stone-600 rounded hover:bg-stone-700"><LucideInfo size={14}/></button>
+                                    {!isCombat && <button onClick={handleRotate} className="p-2 bg-stone-800 text-stone-300 border border-stone-600 rounded hover:bg-stone-700"><LucideRotateCw size={14}/></button>}
+                                    {!isCombat && <button onClick={handleTrash} className="p-2 bg-red-950/50 text-red-400 border border-red-900 rounded hover:bg-red-900"><LucideTrash2 size={14}/></button>}
+                                </>
+                            ) : (
+                                <div className="text-[10px] text-stone-500 animate-pulse">解析构造...</div>
+                            )}
+                        </div>
+                    </div>
+                ) : (
+                    <div className="text-[10px] text-stone-500 italic w-full text-center">点击物品查看详情 · 拖拽整理</div>
+                )}
+            </div>
+
+            <div className="flex justify-center p-2">
+                <div 
+                    ref={playerGridRef}
+                    className="grid gap-1 bg-black p-2 border-2 border-stone-700 shadow-2xl relative"
+                    style={{ gridTemplateColumns: `repeat(${INVENTORY_WIDTH}, minmax(0, 1fr))` }}
+                >
+                    {/* Markers */}
+                    {/* Safe Zone Visual Indicator - Moved to Storage Area (Row 2, Col 0, 4 wide, 4 high) */}
+                    <div 
+                        className="absolute border-r border-b border-dungeon-gold/40 bg-dungeon-gold/5 pointer-events-none z-0"
+                        style={{
+                            width: `calc((2.25rem + 4px) * ${SAFE_ZONE_WIDTH} - 4px)`, // Width calculation fixed (-4px for gap adjustment)
+                            height: `calc((2.25rem + 4px) * ${INVENTORY_HEIGHT - EQUIPMENT_ROW_COUNT} - 4px)`, // Height calculation fixed
+                            top: `calc(0.5rem + (2.25rem + 4px) * ${EQUIPMENT_ROW_COUNT})`, // adjusted for gap-1 (4px)
+                            left: '0.5rem' // p-2 is 0.5rem
+                        }}
+                    ></div>
+
+                    <div className="absolute top-0 right-0 h-[calc((2.25rem+4px)*2)] flex items-start justify-end p-1 pointer-events-none z-0"><span className="text-[8px] text-stone-600 uppercase writing-mode-vertical">装备</span></div>
+                    <div className="absolute bottom-0 right-0 h-[calc((2.25rem+4px)*4)] flex items-end justify-end p-1 pointer-events-none z-0"><span className="text-[8px] text-stone-800 uppercase writing-mode-vertical">行囊</span></div>
+                    
+                    {Array.from({length: INVENTORY_HEIGHT}).map((_, y) => 
+                        Array.from({length: INVENTORY_WIDTH}).map((_, x) => renderCell(x, y, 'PLAYER', inventory.grid, inventory.items))
+                    )}
+                </div>
+            </div>
+            
+            {isLootPhase && (
+                <div className="px-6 w-full max-w-[320px] mx-auto mt-4 mb-safe">
+                    <button onClick={onFinish} disabled={!!searchingItemId} className="w-full flex items-center justify-center gap-2 py-3 bg-dungeon-rust text-stone-200 border border-dungeon-rust font-bold text-sm tracking-[0.2em] font-display hover:bg-dungeon-red shadow-lg disabled:opacity-50 disabled:grayscale">
+                        <LucideCheckCircle size={16} /> {currentStage === maxStage ? '完成区域' : '下一层级'}
+                    </button>
+                </div>
+            )}
+        </div>
+      </div>
+
+      {/* Drag Layer - Now uses consistent visuals with Smart Borders */}
+      {dragState && dragState.isDragging && (
+          <div 
+            className="fixed pointer-events-none z-[100] opacity-80"
+            style={{ 
+                left: dragState.currentX, 
+                // Offset Ghost UP by 60px so finger doesn't hide it
+                top: dragState.currentY - 60,
+                transform: `translate(-${dragState.grabOffsetX}px, -${dragState.grabOffsetY}px)`
+            }}
+          >
+              <div className="grid gap-px p-1" style={{ gridTemplateColumns: `repeat(${dragState.item.shape[0].length}, 36px)` }}>
+                  {dragState.item.shape.map((row, r) => 
+                     row.map((cell, c) => {
+                         // Apply same smart border logic to drag preview
+                         let cellStyle = {};
+                         let cellClass = 'bg-transparent';
+                         
+                         if (cell) {
+                            const borderStyles = getSmartBorders(dragState.item.shape, r, c);
+                            
+                            // Simplified colors for drag
+                            const baseColor = dragState.item.isIdentified ? dragState.item.color.replace('border ', '') : 'bg-stone-600 border-stone-500';
+                            cellClass = `w-9 h-9 ${baseColor}`;
+                            cellStyle = borderStyles;
+                         }
+
+                         return (
+                             <div 
+                                key={`${r}-${c}`} 
+                                className={cellClass}
+                                style={cellStyle}
+                             ></div>
+                         );
+                     })
+                  )}
+              </div>
+          </div>
+      )}
+      
+      {/* Item Details Panel (Overlay when selected) */}
+      {selectedItem && (
+          <div className="fixed inset-x-0 bottom-0 z-50 bg-dungeon-dark border-t border-stone-600 p-4 shadow-2xl animate-slide-in-up pb-8 md:pb-6">
+              <div className="max-w-md mx-auto relative">
+                  <button onClick={() => setSelectedItem(null)} className="absolute top-0 right-0 p-1 text-stone-500"><LucideX size={18}/></button>
+                  <div className="flex gap-4">
+                      {/* Icon Preview */}
+                      <div className="w-16 h-16 bg-black border border-stone-700 flex items-center justify-center shrink-0 relative">
+                          <div className={`w-8 h-8 ${selectedItem.isIdentified ? selectedItem.color.split(' ')[0] : 'bg-stone-600'}`}></div>
+                          {(selectedItem.quantity || 1) > 1 && (
+                              <div className="absolute bottom-1 right-1 text-xs font-mono font-bold text-white bg-black/50 px-1 rounded">x{selectedItem.quantity}</div>
+                          )}
+                      </div>
+                      <div className="flex-1">
+                          <h3 className={`text-lg font-bold font-display ${selectedItem.rarity === 'LEGENDARY' ? 'text-dungeon-gold' : selectedItem.rarity === 'RARE' ? 'text-purple-400' : 'text-stone-200'}`}>
+                              {selectedItem.isIdentified ? selectedItem.name : '未知物体'}
+                          </h3>
+                          <div className="flex justify-between items-center mb-1">
+                              <div className="text-xs text-stone-500 uppercase tracking-widest">{selectedItem.isIdentified ? TYPE_LABELS[selectedItem.type] : selectedItem.type}</div>
+                              
+                              {/* Value Display */}
+                              {selectedItem.isIdentified && (
+                                  <div className="flex items-center gap-1 text-xs font-mono font-bold text-yellow-500 bg-yellow-900/20 px-2 py-0.5 rounded border border-yellow-800">
+                                      <LucideCoins size={12} />
+                                      <span>估值: {selectedItem.value * (selectedItem.quantity || 1)} ₮</span>
+                                  </div>
+                              )}
+                          </div>
+                          
+                          {selectedItem.isIdentified ? (
+                              <>
+                                <p className="text-xs text-stone-400 leading-relaxed">{selectedItem.description}</p>
+                                {selectedItem.stats && (
+                                    <div className="flex flex-wrap gap-2 mt-2">
+                                        {Object.entries(selectedItem.stats).map(([k,v]) => (
+                                            <span key={k} className="text-[10px] bg-stone-800 px-1.5 py-0.5 rounded text-stone-300 border border-stone-700">{STAT_LABELS[k] || k}: +{v}</span>
+                                        ))}
+                                    </div>
+                                )}
+                              </>
+                          ) : (
+                              <p className="text-xs text-stone-500 italic">
+                                  {searchingItemId === selectedItem.id ? '正在分析物体构造...' : '这东西被灰尘和污秽覆盖，需要鉴定才能知晓其真面目。'}
+                              </p>
+                          )}
+                      </div>
+                  </div>
+              </div>
+          </div>
+      )}
+
+    </div>
+  );
+};
