@@ -146,6 +146,14 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const [justRevealedId, setJustRevealedId] = useState<string | null>(null); // For feedback animation
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // PAGINATION LOGIC (Warehouse Box Mode)
+  const [warehousePage, setWarehousePage] = useState(0);
+  const isPaginated = !!externalInventory;
+  const rowsPerPage = 7;
+  const totalPages = isPaginated ? Math.ceil((externalInventory?.height || CONTAINER_HEIGHT) / rowsPerPage) : 1;
+  const startY = isPaginated ? warehousePage * rowsPerPage : 0;
+  const endY = isPaginated ? Math.min(startY + rowsPerPage, externalInventory?.height || CONTAINER_HEIGHT) : CONTAINER_HEIGHT;
+
   // Refs for Grids to calculate hover
   const playerGridRef = useRef<HTMLDivElement>(null);
   const lootGridRef = useRef<HTMLDivElement>(null);
@@ -460,12 +468,12 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       if (searchingItemId !== null) return; // Busy
 
       const rect = e.currentTarget.getBoundingClientRect();
-      const stride = CELL_SIZE + CELL_GAP;
-      // Core Fix: Calculate exact finger offset relative to the item's global top-left corner
-      const deltaX = (cellX - item.x) * stride;
-      const deltaY = (cellY - item.y) * stride;
-      const offsetX = e.clientX - rect.left + deltaX;
-      const offsetY = e.clientY - rect.top + deltaY;
+      
+      // Core Fix: e.currentTarget is the bounding box covering the entire item shape.
+      // e.clientX - rect.left is exactly the pixel distance from pointer to the item's true top-left corner.
+      // No extra math (deltaX/Y) is needed! This solves all janky snapping offsets.
+      const offsetX = e.clientX - rect.left;
+      const offsetY = e.clientY - rect.top;
 
       setDragState({
           item,
@@ -487,28 +495,32 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       clientX: number, clientY: number, 
       grabOffsetX: number, grabOffsetY: number, 
       gridRect: DOMRect, gridW: number, gridH: number,
-      itemShape?: number[][], targetUnlocked?: number
+      itemShape?: number[][], targetUnlocked?: number,
+      pageYOffset: number = 0,
+      rowsPerPageLimit?: number
   ) => {
       const stride = CELL_SIZE + CELL_GAP;
-      const padding = 8; // 修正: 补偿 grid 容器的 p-2 (8px) 填充
-      const relativeX = clientX - gridRect.left - grabOffsetX - padding; 
-      const relativeY = clientY - gridRect.top - grabOffsetY - padding;
+      const padding = 8;
       
-      // 修正: 使用 Math.floor 配合半格偏移，让最后一行拥有完整的交互宽度，不再“难点”
-      let cellX = Math.floor((relativeX + stride / 2) / stride);
-      let cellY = Math.floor((relativeY + stride / 2) / stride);
+      // Calculate true visual top-left relative to grid content area
+      const itemLeft = clientX - grabOffsetX - gridRect.left - padding;
+      const itemTop = clientY - grabOffsetY - gridRect.top - padding;
+      
+      // Math.round is perfectly accurate and avoids half-cell floor biases
+      let cellX = Math.round(itemLeft / stride);
+      let cellY = Math.round(itemTop / stride) + pageYOffset;
       
       const shapeW = itemShape ? (itemShape[0]?.length || 1) : 1;
       const shapeH = itemShape ? (itemShape.length || 1) : 1;
       
-      // 限制不超出物理网格边界
       cellX = Math.max(0, Math.min(cellX, gridW - shapeW));
-      cellY = Math.max(0, Math.min(cellY, gridH - shapeH));
       
-      // 限制不超出未解锁区域 (核心修复：最后一行与新解锁行放置困难问题)
+      const currentGridBottom = rowsPerPageLimit ? Math.min(gridH, pageYOffset + rowsPerPageLimit) : gridH;
+      cellY = Math.max(pageYOffset, Math.min(cellY, currentGridBottom - shapeH));
+      
       if (targetUnlocked !== undefined) {
           cellY = Math.min(cellY, targetUnlocked - shapeH);
-          cellY = Math.max(0, cellY); // 防止 shapeH 大于解锁行数时的负数异常
+          cellY = Math.max(pageYOffset, cellY); 
       }
       
       return { cellX, cellY };
@@ -561,13 +573,15 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               }
 
               if (targetGridType && gridRect) {
-                   // 修正: 无论落在哪个网格，都要根据其类型动态获取对应的 unlockedRows
                    const targetUnlocked = targetGridType === 'PLAYER' ? inventory.unlockedRows : externalInventory?.unlockedRows;
+                   const pageYOffset = targetGridType === 'LOOT' && isPaginated ? warehousePage * rowsPerPage : 0;
+                   const rowsLimit = targetGridType === 'LOOT' && isPaginated ? rowsPerPage : undefined;
+                   
                    const { cellX, cellY } = calculateTargetCell(
                        e.clientX, e.clientY, 
                        dragState.grabOffsetX, dragState.grabOffsetY, 
                        gridRect, gW, gH, 
-                       dragState.item.shape, targetUnlocked
+                       dragState.item.shape, targetUnlocked, pageYOffset, rowsLimit
                    );
                    
                    // Check collision with standard logic first
@@ -665,12 +679,15 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       }
 
       if (targetGridType && gridRect) {
-          const targetUnlocked = targetGridType === 'LOOT' ? externalInventory?.unlockedRows : undefined;
+          const targetUnlocked = targetGridType === 'PLAYER' ? inventory.unlockedRows : externalInventory?.unlockedRows;
+          const pageYOffset = targetGridType === 'LOOT' && isPaginated ? warehousePage * rowsPerPage : 0;
+          const rowsLimit = targetGridType === 'LOOT' && isPaginated ? rowsPerPage : undefined;
+          
           const { cellX, cellY } = calculateTargetCell(
               e.clientX, e.clientY, 
               state.grabOffsetX, state.grabOffsetY, 
               gridRect, gridW, gridH, 
-              state.item.shape, targetUnlocked
+              state.item.shape, targetUnlocked, pageYOffset, rowsLimit
           );
 
           // Logic
@@ -1063,20 +1080,24 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                const gW = gridType === 'PLAYER' ? inventory.width : (externalInventory ? externalInventory.width : CONTAINER_WIDTH);
                const targetUnlocked = gridType === 'PLAYER' ? inventory.unlockedRows : externalInventory?.unlockedRows;
 
+               const pageYOffset = gridType === 'LOOT' && isPaginated ? warehousePage * rowsPerPage : 0;
+               const rowsLimit = gridType === 'LOOT' && isPaginated ? rowsPerPage : undefined;
+
                const shapeW = dragState.item.shape[0]?.length || 1;
                const shapeH = dragState.item.shape.length || 1;
                const padding = 8;
 
-               // 修正: 视觉阴影也要考虑 8px 补偿和 Math.floor 逻辑
-               let cellX = Math.floor((itemTopLeftX - padding + stride / 2) / stride);
-               let cellY = Math.floor((itemTopLeftY - padding + stride / 2) / stride);
+               let cellX = Math.round(itemTopLeftX / stride);
+               let cellY = Math.round(itemTopLeftY / stride) + pageYOffset;
 
                cellX = Math.max(0, Math.min(cellX, gW - shapeW));
-               cellY = Math.max(0, Math.min(cellY, gH - shapeH));
+               
+               const currentGridBottom = rowsLimit ? Math.min(gH, pageYOffset + rowsLimit) : gH;
+               cellY = Math.max(pageYOffset, Math.min(cellY, currentGridBottom - shapeH));
                
                if (targetUnlocked !== undefined) {
                    cellY = Math.min(cellY, targetUnlocked - shapeH);
-                   cellY = Math.max(0, cellY);
+                   cellY = Math.max(pageYOffset, cellY);
                }
                
                // Check if this specific cell (x,y) is part of the ghost shape at (cellX, cellY)
@@ -1296,7 +1317,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                             </div>
                         </div>
                         
-                        <div className="relative p-1 bg-gradient-to-b from-stone-800 to-black rounded-sm border border-stone-700 shadow-inner flex-1 overflow-auto min-h-0 w-full flex justify-center">
+                        <div className="relative p-1 bg-gradient-to-b from-stone-800 to-black rounded-sm border border-stone-700 shadow-inner flex-1 overflow-hidden min-h-0 w-full flex flex-col items-center">
                             <div className="absolute top-0 left-0 w-2 h-2 border-t border-l border-stone-500"></div>
                             <div className="absolute top-0 right-0 w-2 h-2 border-t border-r border-stone-500"></div>
                             <div className="absolute bottom-0 left-0 w-2 h-2 border-b border-l border-stone-500"></div>
@@ -1304,33 +1325,63 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                             
                             <div 
                                 ref={lootGridRef}
-                                className="grid gap-1 bg-black/80 mx-auto mt-2 mb-16 relative"
+                                className="grid gap-1 bg-black/80 mx-auto mt-2 mb-2 relative"
                                 style={{ 
                                     gridTemplateColumns: `repeat(${externalInventory ? externalInventory.width : CONTAINER_WIDTH}, 36px)` 
                                 }}
                             >
-                                {Array.from({length: externalInventory ? externalInventory.height : CONTAINER_HEIGHT}).map((_, y) => 
-                                    Array.from({length: externalInventory ? externalInventory.width : CONTAINER_WIDTH}).map((_, x) => renderCell(x, y, 'LOOT', lootGrid, lootItems))
-                                )}
+                                {Array.from({length: endY - startY}).map((_, i) => {
+                                    const y = startY + i;
+                                    return Array.from({length: externalInventory ? externalInventory.width : CONTAINER_WIDTH}).map((_, x) => renderCell(x, y, 'LOOT', lootGrid, lootItems))
+                                })}
                                 
                                 {externalInventory && externalInventory.unlockedRows !== undefined && externalInventory.unlockedRows < externalInventory.height && (
-                                    <div 
-                                        className="absolute left-0 right-0 z-30 flex justify-center items-center pointer-events-none"
-                                        style={{ top: `${externalInventory.unlockedRows * 40}px`, height: '40px' }}
-                                    >
-                                        <button 
-                                            className="pointer-events-auto bg-black/80 hover:bg-dungeon-gold/20 border border-dungeon-gold text-dungeon-gold text-xs px-4 py-1 rounded backdrop-blur-sm shadow-lg flex items-center gap-2 transition-all"
-                                            onClick={() => {
-                                                if (setExternalInventory) {
-                                                    setExternalInventory(prev => ({...prev, unlockedRows: (prev.unlockedRows || 0) + 1}));
-                                                }
-                                            }}
-                                        >
-                                            <LucideLock size={12} /> 解锁扩容 (🪙 1000)
-                                        </button>
-                                    </div>
+                                    (() => {
+                                        const localY = externalInventory.unlockedRows - startY;
+                                        if (localY >= 0 && localY < rowsPerPage) {
+                                            return (
+                                                <div 
+                                                    className="absolute left-0 right-0 z-30 flex justify-center items-center pointer-events-none"
+                                                    style={{ top: `${localY * 40}px`, height: '40px' }}
+                                                >
+                                                    <button 
+                                                        className="pointer-events-auto bg-black/80 hover:bg-dungeon-gold/20 border border-dungeon-gold text-dungeon-gold text-xs px-4 py-1 rounded backdrop-blur-sm shadow-lg flex items-center gap-2 transition-all"
+                                                        onClick={() => {
+                                                            if (setExternalInventory) {
+                                                                setExternalInventory(prev => ({...prev, unlockedRows: (prev.unlockedRows || 0) + 1}));
+                                                            }
+                                                        }}
+                                                    >
+                                                        <LucideLock size={12} /> 解锁扩容 (🪙 1000)
+                                                    </button>
+                                                </div>
+                                            )
+                                        }
+                                        return null;
+                                    })()
                                 )}
                             </div>
+
+                            {/* Pagination Controls */}
+                            {isPaginated && totalPages > 1 && (
+                                <div className="flex items-center justify-center gap-4 mt-auto w-full pt-2 pb-1 border-t border-stone-800/50">
+                                    <button 
+                                        onClick={() => setWarehousePage(p => Math.max(0, p - 1))} 
+                                        disabled={warehousePage === 0} 
+                                        className="px-3 py-1 bg-stone-800 text-stone-300 disabled:opacity-30 rounded border border-stone-600 hover:bg-stone-700 font-bold transition-opacity"
+                                    >
+                                        &lt;
+                                    </button>
+                                    <span className="text-xs font-mono text-dungeon-gold tracking-widest">页码 {warehousePage + 1} / {totalPages}</span>
+                                    <button 
+                                        onClick={() => setWarehousePage(p => Math.min(totalPages - 1, p + 1))} 
+                                        disabled={warehousePage === totalPages - 1} 
+                                        className="px-3 py-1 bg-stone-800 text-stone-300 disabled:opacity-30 rounded border border-stone-600 hover:bg-stone-700 font-bold transition-opacity"
+                                    >
+                                        &gt;
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     </div>
                 )}
