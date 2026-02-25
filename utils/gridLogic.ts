@@ -61,11 +61,11 @@ export const canPlaceItem = (
         const targetX = gridX + c;
         const targetY = gridY + r;
 
-        // 1. Out of bounds check
+        // 1. 边界与解锁区域检查 (修正: 确保 targetY 严格遵守传入的解锁行限制)
         if (targetX < 0 || targetX >= gridWidth || targetY < 0 || targetY >= gridHeight) {
           return false;
         }
-        if (unlockedRows !== undefined && targetY >= unlockedRows) {
+        if (unlockedRows !== undefined && unlockedRows > 0 && targetY >= unlockedRows) {
           return false;
         }
 

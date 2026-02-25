@@ -490,12 +490,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       itemShape?: number[][], targetUnlocked?: number
   ) => {
       const stride = CELL_SIZE + CELL_GAP;
-      const relativeX = clientX - gridRect.left - grabOffsetX; 
-      const relativeY = clientY - gridRect.top - grabOffsetY;
+      const padding = 8; // 修正: 补偿 grid 容器的 p-2 (8px) 填充
+      const relativeX = clientX - gridRect.left - grabOffsetX - padding; 
+      const relativeY = clientY - gridRect.top - grabOffsetY - padding;
       
-      // 核心修复：改回 Math.round 恢复平滑吸附，并增加边界强力钳制 (Clamp)
-      let cellX = Math.round(relativeX / stride);
-      let cellY = Math.round(relativeY / stride);
+      // 修正: 使用 Math.floor 配合半格偏移，让最后一行拥有完整的交互宽度，不再“难点”
+      let cellX = Math.floor((relativeX + stride / 2) / stride);
+      let cellY = Math.floor((relativeY + stride / 2) / stride);
       
       const shapeW = itemShape ? (itemShape[0]?.length || 1) : 1;
       const shapeH = itemShape ? (itemShape.length || 1) : 1;
@@ -548,7 +549,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                   targetGridType = 'PLAYER';
                   gridRect = playerRect;
                   gridItems = inventory.items;
-                  gW = INVENTORY_WIDTH; gH = INVENTORY_HEIGHT;
+                  // 修正: 使用动态高度 inventory.height (支持仓库的14行)，不再写死 6
+                  gW = inventory.width; 
+                  gH = inventory.height;
               } else if (lootRect && e.clientX >= lootRect.left && e.clientX <= lootRect.right && e.clientY >= lootRect.top && e.clientY <= lootRect.bottom) {
                   targetGridType = 'LOOT';
                   gridRect = lootRect;
@@ -558,7 +561,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               }
 
               if (targetGridType && gridRect) {
-                   const targetUnlocked = targetGridType === 'LOOT' ? externalInventory?.unlockedRows : undefined;
+                   // 修正: 无论落在哪个网格，都要根据其类型动态获取对应的 unlockedRows
+                   const targetUnlocked = targetGridType === 'PLAYER' ? inventory.unlockedRows : externalInventory?.unlockedRows;
                    const { cellX, cellY } = calculateTargetCell(
                        e.clientX, e.clientY, 
                        dragState.grabOffsetX, dragState.grabOffsetY, 
@@ -1054,17 +1058,18 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                const itemTopLeftX = relativeX - dragState.grabOffsetX;
                const itemTopLeftY = relativeY - dragState.grabOffsetY;
                
-               // Get Grid Dimensions based on Type
-               const gH = gridType === 'PLAYER' ? INVENTORY_HEIGHT : (externalInventory ? externalInventory.height : CONTAINER_HEIGHT);
-               const gW = gridType === 'PLAYER' ? INVENTORY_WIDTH : (externalInventory ? externalInventory.width : CONTAINER_WIDTH);
-               const targetUnlocked = gridType === 'LOOT' ? externalInventory?.unlockedRows : undefined;
+               // 修正: 获取网格尺寸与解锁行，确保与 handleMove 逻辑完全同步
+               const gH = gridType === 'PLAYER' ? inventory.height : (externalInventory ? externalInventory.height : CONTAINER_HEIGHT);
+               const gW = gridType === 'PLAYER' ? inventory.width : (externalInventory ? externalInventory.width : CONTAINER_WIDTH);
+               const targetUnlocked = gridType === 'PLAYER' ? inventory.unlockedRows : externalInventory?.unlockedRows;
 
                const shapeW = dragState.item.shape[0]?.length || 1;
                const shapeH = dragState.item.shape.length || 1;
+               const padding = 8;
 
-               // 改回 Math.round，并加入相同的边界钳制，确保视觉绿框与物理判定完全一致
-               let cellX = Math.round(itemTopLeftX / stride);
-               let cellY = Math.round(itemTopLeftY / stride);
+               // 修正: 视觉阴影也要考虑 8px 补偿和 Math.floor 逻辑
+               let cellX = Math.floor((itemTopLeftX - padding + stride / 2) / stride);
+               let cellY = Math.floor((itemTopLeftY - padding + stride / 2) / stride);
 
                cellX = Math.max(0, Math.min(cellX, gW - shapeW));
                cellY = Math.max(0, Math.min(cellY, gH - shapeH));
