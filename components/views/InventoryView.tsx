@@ -483,14 +483,32 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   };
 
   // Calculate Target Cell logic extracted for reuse in Move and Preview
-  const calculateTargetCell = (clientX: number, clientY: number, grabOffsetX: number, grabOffsetY: number, gridRect: DOMRect, gridW: number, gridH: number) => {
+  const calculateTargetCell = (
+      clientX: number, clientY: number, 
+      grabOffsetX: number, grabOffsetY: number, 
+      gridRect: DOMRect, gridW: number, gridH: number,
+      itemShape?: number[][], targetUnlocked?: number
+  ) => {
       const stride = CELL_SIZE + CELL_GAP;
       const relativeX = clientX - gridRect.left - grabOffsetX; 
       const relativeY = clientY - gridRect.top - grabOffsetY;
       
-      // 核心修复：使用 Math.floor 确保吸附逻辑与物品左上角的真实物理位置 100% 对齐，不再提前跳跃
-      const cellX = Math.max(0, Math.min(Math.floor(relativeX / stride), gridW - 1));
-      const cellY = Math.max(0, Math.min(Math.floor(relativeY / stride), gridH - 1));
+      // 核心修复：改回 Math.round 恢复平滑吸附，并增加边界强力钳制 (Clamp)
+      let cellX = Math.round(relativeX / stride);
+      let cellY = Math.round(relativeY / stride);
+      
+      const shapeW = itemShape ? (itemShape[0]?.length || 1) : 1;
+      const shapeH = itemShape ? (itemShape.length || 1) : 1;
+      
+      // 限制不超出物理网格边界
+      cellX = Math.max(0, Math.min(cellX, gridW - shapeW));
+      cellY = Math.max(0, Math.min(cellY, gridH - shapeH));
+      
+      // 限制不超出未解锁区域 (核心修复：最后一行与新解锁行放置困难问题)
+      if (targetUnlocked !== undefined) {
+          cellY = Math.min(cellY, targetUnlocked - shapeH);
+          cellY = Math.max(0, cellY); // 防止 shapeH 大于解锁行数时的负数异常
+      }
       
       return { cellX, cellY };
   };
@@ -540,7 +558,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               }
 
               if (targetGridType && gridRect) {
-                   const { cellX, cellY } = calculateTargetCell(e.clientX, e.clientY, dragState.grabOffsetX, dragState.grabOffsetY, gridRect, gW, gH);
+                   const targetUnlocked = targetGridType === 'LOOT' ? externalInventory?.unlockedRows : undefined;
+                   const { cellX, cellY } = calculateTargetCell(
+                       e.clientX, e.clientY, 
+                       dragState.grabOffsetX, dragState.grabOffsetY, 
+                       gridRect, gW, gH, 
+                       dragState.item.shape, targetUnlocked
+                   );
                    
                    // Check collision with standard logic first
                    // Remove dragging item from grid simulation
@@ -549,9 +573,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                        tempItems = gridItems.filter(i => i.id !== dragState.item.id);
                    }
                    
-                 const tempGrid = rebuildGrid(tempItems, gW, gH);
+                   const tempGrid = rebuildGrid(tempItems, gW, gH);
                    const itemForCheck = dragState.item;
-                   const targetUnlocked = targetGridType === 'LOOT' ? externalInventory?.unlockedRows : undefined;
                    
                    if (!canPlaceItem(tempGrid, itemForCheck, cellX, cellY, targetUnlocked)) {
                         // Collision detected! Try Smart Arrange
@@ -638,7 +661,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       }
 
       if (targetGridType && gridRect) {
-          const { cellX, cellY } = calculateTargetCell(e.clientX, e.clientY, state.grabOffsetX, state.grabOffsetY, gridRect, gridW, gridH);
+          const targetUnlocked = targetGridType === 'LOOT' ? externalInventory?.unlockedRows : undefined;
+          const { cellX, cellY } = calculateTargetCell(
+              e.clientX, e.clientY, 
+              state.grabOffsetX, state.grabOffsetY, 
+              gridRect, gridW, gridH, 
+              state.item.shape, targetUnlocked
+          );
 
           // Logic
           // 1. Remove from source temporarily to check placement
@@ -667,7 +696,6 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
           // 3. Check Placement OR Smart Arrange
           const itemForCheck = state.item;
-          const targetUnlocked = targetGridType === 'LOOT' ? externalInventory?.unlockedRows : undefined;
 
           // Standard Place
           if (canPlaceItem(tempTargetGrid, itemForCheck, cellX, cellY, targetUnlocked)) {
@@ -1029,11 +1057,22 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                // Get Grid Dimensions based on Type
                const gH = gridType === 'PLAYER' ? INVENTORY_HEIGHT : (externalInventory ? externalInventory.height : CONTAINER_HEIGHT);
                const gW = gridType === 'PLAYER' ? INVENTORY_WIDTH : (externalInventory ? externalInventory.width : CONTAINER_WIDTH);
+               const targetUnlocked = gridType === 'LOOT' ? externalInventory?.unlockedRows : undefined;
 
-               // Calculate cell index
-               // 我们使用 Math.floor 确保悬停绿框/红框也能精确贴合物体拖拽的真实边缘
-               const cellX = Math.floor(itemTopLeftX / stride);
-               const cellY = Math.floor(itemTopLeftY / stride);
+               const shapeW = dragState.item.shape[0]?.length || 1;
+               const shapeH = dragState.item.shape.length || 1;
+
+               // 改回 Math.round，并加入相同的边界钳制，确保视觉绿框与物理判定完全一致
+               let cellX = Math.round(itemTopLeftX / stride);
+               let cellY = Math.round(itemTopLeftY / stride);
+
+               cellX = Math.max(0, Math.min(cellX, gW - shapeW));
+               cellY = Math.max(0, Math.min(cellY, gH - shapeH));
+               
+               if (targetUnlocked !== undefined) {
+                   cellY = Math.min(cellY, targetUnlocked - shapeH);
+                   cellY = Math.max(0, cellY);
+               }
                
                // Check if this specific cell (x,y) is part of the ghost shape at (cellX, cellY)
                const dx = x - cellX;
