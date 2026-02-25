@@ -488,8 +488,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       const relativeX = clientX - gridRect.left - grabOffsetX; 
       const relativeY = clientY - gridRect.top - grabOffsetY;
       
-      const cellX = Math.max(0, Math.min(Math.round(relativeX / stride), gridW - 1));
-      const cellY = Math.max(0, Math.min(Math.round(relativeY / stride), gridH - 1));
+      // 核心修复：使用 Math.floor 确保吸附逻辑与物品左上角的真实物理位置 100% 对齐，不再提前跳跃
+      const cellX = Math.max(0, Math.min(Math.floor(relativeX / stride), gridW - 1));
+      const cellY = Math.max(0, Math.min(Math.floor(relativeY / stride), gridH - 1));
       
       return { cellX, cellY };
   };
@@ -1030,9 +1031,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                const gW = gridType === 'PLAYER' ? INVENTORY_WIDTH : (externalInventory ? externalInventory.width : CONTAINER_WIDTH);
 
                // Calculate cell index
-               // We use Math.round to snap to nearest cell center
-               const cellX = Math.round(itemTopLeftX / stride);
-               const cellY = Math.round(itemTopLeftY / stride);
+               // 我们使用 Math.floor 确保悬停绿框/红框也能精确贴合物体拖拽的真实边缘
+               const cellX = Math.floor(itemTopLeftX / stride);
+               const cellY = Math.floor(itemTopLeftY / stride);
                
                // Check if this specific cell (x,y) is part of the ghost shape at (cellX, cellY)
                const dx = x - cellX;
@@ -1259,7 +1260,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                             
                             <div 
                                 ref={lootGridRef}
-                                className="grid gap-1 bg-black/80 mx-auto mt-2 mb-16"
+                                className="grid gap-1 bg-black/80 mx-auto mt-2 mb-16 relative"
                                 style={{ 
                                     gridTemplateColumns: `repeat(${externalInventory ? externalInventory.width : CONTAINER_WIDTH}, 36px)` 
                                 }}
