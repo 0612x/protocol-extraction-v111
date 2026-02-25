@@ -1253,7 +1253,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                             
                             <div 
                                 ref={lootGridRef}
-                                className="grid gap-1 bg-black/80 m-auto"
+                                className="grid gap-1 bg-black/80 mx-auto mt-2 mb-16"
                                 style={{ 
                                     gridTemplateColumns: `repeat(${externalInventory ? externalInventory.width : CONTAINER_WIDTH}, 36px)` 
                                 }}

@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { GamePhase, PlayerStats, Enemy, InventoryState, CardType, Blueprint, GridItem, MetaState, ResourceType, BuildingType, Character } from './types';
-import { INVENTORY_WIDTH, INVENTORY_HEIGHT, STARTING_BLUEPRINTS, BLUEPRINT_POOL, SAFE_ZONE_WIDTH, STAGES_PER_DEPTH, EQUIPMENT_ROW_COUNT } from './constants';
+import { INVENTORY_WIDTH, INVENTORY_HEIGHT, WAREHOUSE_WIDTH, WAREHOUSE_HEIGHT, STARTING_BLUEPRINTS, BLUEPRINT_POOL, SAFE_ZONE_WIDTH, STAGES_PER_DEPTH, EQUIPMENT_ROW_COUNT } from './constants';
 import { createEmptyGrid, removeItemFromGrid, placeItemInGrid } from './utils/gridLogic';
 import { CombatView } from './components/views/CombatView';
 import { InventoryView } from './components/views/InventoryView';
@@ -52,10 +52,10 @@ const INITIAL_META_STATE: MetaState = {
   unlockedItems: [],
   runHistory: [],
   warehouse: {
-    grid: createEmptyGrid(INVENTORY_WIDTH, INVENTORY_HEIGHT),
+    grid: createEmptyGrid(WAREHOUSE_WIDTH, WAREHOUSE_HEIGHT),
     items: [],
-    width: INVENTORY_WIDTH,
-    height: INVENTORY_HEIGHT
+    width: WAREHOUSE_WIDTH,
+    height: WAREHOUSE_HEIGHT
   },
   roster: [
     {
@@ -76,8 +76,20 @@ export default function App() {
     const saved = localStorage.getItem('rogue-ttrpg-meta');
     const initialState = saved ? JSON.parse(saved) : INITIAL_META_STATE;
 
+    // Data Migration: Warehouse Expand
+    if (initialState.warehouse && initialState.warehouse.height !== WAREHOUSE_HEIGHT) {
+        let newGrid = createEmptyGrid(WAREHOUSE_WIDTH, WAREHOUSE_HEIGHT);
+        initialState.warehouse.items.forEach((item: GridItem) => {
+            const itemForPlacement = { ...item, rotation: 0 as const };
+            newGrid = placeItemInGrid(newGrid, itemForPlacement, item.x, item.y);
+        });
+        initialState.warehouse.grid = newGrid;
+        initialState.warehouse.width = WAREHOUSE_WIDTH;
+        initialState.warehouse.height = WAREHOUSE_HEIGHT;
+    }
+
     // Data Migration: Ensure all items have originalShape
-    initialState.roster?.forEach(char => {
+    initialState.roster?.forEach((char: Character) => {
         char.inventory?.items?.forEach(item => {
             if (!item.originalShape) {
                 item.originalShape = item.shape;
