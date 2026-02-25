@@ -188,29 +188,27 @@ export const findSmartArrangement = (
     // Build a temporary grid with STATIC items + FIXED dragged item
     let tempGrid = createEmptyGrid(gridWidth, gridHeight);
     
-    // Place Statics
+   // Place Statics
     for (const item of staticItems) {
         tempGrid = placeItemInGrid(tempGrid, item, item.x, item.y);
     }
-    // Place Fixed Dragged Item (Pass rotation 0 because shape is source of truth)
-    const fixedItemObj = { ...fixedItem, x: fixedX, y: fixedY, rotation: 0 as const }; 
+    // Place Fixed Dragged Item
+    const fixedItemObj = { ...fixedItem, x: fixedX, y: fixedY }; 
     tempGrid = placeItemInGrid(tempGrid, fixedItemObj, fixedX, fixedY);
 
     // 3. Try to place displaced items with Rotation
     const newPositions: GridItem[] = [];
 
-    // Heuristic: Sort items to move by size (largest first usually harder to place)
     itemsToMove.sort((a, b) => (b.shape.length * (b.shape[0]?.length || 0)) - (a.shape.length * (a.shape[0]?.length || 0)));
 
     for (const item of itemsToMove) {
         let placed = false;
         
-        // Search Radius Strategy: Spiral out from original position
+        // Search Radius Strategy: Use Euclidean distance for smoother circular spread
         const candidates: {x: number, y: number, dist: number}[] = [];
-        
         for (let y = 0; y < gridHeight; y++) {
             for (let x = 0; x < gridWidth; x++) {
-                const dist = Math.abs(x - item.x) + Math.abs(y - item.y); 
+                const dist = Math.hypot(x - item.x, y - item.y); 
                 candidates.push({ x, y, dist });
             }
         }
@@ -219,53 +217,32 @@ export const findSmartArrangement = (
         for (const pos of candidates) {
             if (placed) break;
 
-            // Try all 4 rotations, starting with CURRENT rotation
-            // We use item.originalShape (base unrotated) if available to generate pure rotations,
-            // otherwise we rotate current item.shape.
-            
-            // Note: In this app, item.originalShape seems to be kept in sync with item.shape via rotation logic 
-            // in InventoryView (handleRotate updates both). So item.originalShape effectively represents 
-            // the shape at 'current' orientation but maybe before some specialized masking.
-            // Let's assume item.shape is the definitive shape at current rotation.
-            
-            let testShape = item.originalShape || item.shape;
-
+            const startRot = item.rotation || 0;
             for (let r = 0; r < 4; r++) {
-                 // Try rotations: 0, 90, 180, 270 relative to base shape
-                 // But wait, we want to try *current* rotation first to minimize spinning.
-                 // Let's just iterate 0..3 on top of testShape.
-                 // We need to calculate the actual new Rotation attribute.
+                 const testRotation = (startRot + r * 90) % 360 as 0 | 90 | 180 | 270;
                  
-                 // If we rotate 'testShape', we are effectively adding 90deg to the rotation.
-                 // r=0: current base shape (originalShape is synced to current state in this app logic)
-                 
-                 const newRotation = (item.rotation + (r * 90)) % 360 as 0 | 90 | 180 | 270;
+                 const tempDummy = { ...item, rotation: testRotation };
+                 const rotatedShapeMatrix = getRotatedShape(tempDummy);
                  
                  const testItem = { 
                      ...item, 
                      x: pos.x, 
                      y: pos.y, 
-                     shape: testShape,
-                     rotation: newRotation,
-                     // We update originalShape in result to match the visual shape if that's how app state tracks it
-                     originalShape: item.originalShape ? testShape : undefined
+                     shape: rotatedShapeMatrix,
+                     rotation: testRotation,
+                     originalShape: item.originalShape || item.shape
                  };
                  
-                 // Check placement (rotation=0 because shape is manually rotated)
-                 if (canPlaceItem(tempGrid, testItem, pos.x, pos.y, 0)) {
-                     // Success
+                 if (canPlaceItem(tempGrid, testItem, pos.x, pos.y)) {
                      tempGrid = placeItemInGrid(tempGrid, testItem, pos.x, pos.y);
                      newPositions.push(testItem);
                      placed = true;
                      break;
                  }
-                 
-                 // Rotate shape for next iteration
-                 testShape = rotateMatrix(testShape);
             }
         }
 
-        if (!placed) return null; // Failed to find space for one of the displaced items
+        if (!placed) return null;
     }
 
     return newPositions;

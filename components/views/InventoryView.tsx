@@ -434,11 +434,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const rebuildGrid = (items: GridItem[], w: number, h: number) => {
       let g = createEmptyGrid(w, h);
       items.forEach(i => {
-          // FIX: Pass rotation: 0 because 'i.shape' is already rotated in state.
-          // This prevents double-rotation in placeItemInGrid which caused the crash.
-          const itemForPlacement = { ...i, rotation: 0 as const };
-          if (canPlaceItem(g, itemForPlacement, i.x, i.y, 0)) { 
-              g = placeItemInGrid(g, itemForPlacement, i.x, i.y);
+          if (canPlaceItem(g, i, i.x, i.y)) { 
+              g = placeItemInGrid(g, i, i.x, i.y);
           }
       });
       return g;
@@ -548,9 +545,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                    }
                    
                    const tempGrid = rebuildGrid(tempItems, gW, gH);
-                   const itemForCheck = { ...dragState.item, rotation: 0 as const };
+                   const itemForCheck = dragState.item;
                    
-                   if (!canPlaceItem(tempGrid, itemForCheck, cellX, cellY, 0)) {
+                   if (!canPlaceItem(tempGrid, itemForCheck, cellX, cellY)) {
                         // Collision detected! Try Smart Arrange
                         const rearrangement = findSmartArrangement(tempItems, itemForCheck, cellX, cellY, gW, gH);
                         
@@ -663,10 +660,10 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           }
 
           // 3. Check Placement OR Smart Arrange
-          const itemForCheck = { ...state.item, rotation: 0 as const };
+          const itemForCheck = state.item;
 
           // Standard Place
-          if (canPlaceItem(tempTargetGrid, itemForCheck, cellX, cellY, 0)) {
+          if (canPlaceItem(tempTargetGrid, itemForCheck, cellX, cellY)) {
                moveItem(state.item, state.sourceGrid, targetGridType, cellX, cellY);
                return;
           }
@@ -721,7 +718,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       });
 
       // 4. Add the dragged item to the list at new pos
-      const newItem = { ...draggedItem, x: targetX, y: targetY, rotation: 0 as const, shape: draggedItem.originalShape, originalShape: draggedItem.originalShape };
+      const newItem = { ...draggedItem, x: targetX, y: targetY };
       updatedItems.push(newItem);
 
       // 5. Commit to State
@@ -834,8 +831,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     
     // 1. Calculate new rotation/shape
     const nextRot = (selectedItem.rotation + 90) % 360 as 0 | 90 | 180 | 270;
-    const newShape = rotateMatrix(selectedItem.shape);
-    const newOriginalShape = selectedItem.originalShape ? rotateMatrix(selectedItem.originalShape) : undefined;
+    const dummyItem = { ...selectedItem, rotation: nextRot };
+    const newShape = getRotatedShape(dummyItem); 
     
     // 2. Prepare grid environment
     const isPlayerInventory = inventory.items.some(i => i.id === selectedItem.id);
@@ -843,8 +840,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     
     // Remove self from grid temporarily to allow rotation in place
     const tempGrid = removeItemFromGrid(gridData, selectedItem.id);
-    // IMPORTANT: rotation: 0 used for checks because shape is manually rotated
-    const tempItem = { ...selectedItem, shape: newShape, rotation: 0 as const };
+    const tempItem = { ...selectedItem, rotation: nextRot, shape: newShape };
     
     // 3. SMART ROTATION (Wall Kicks with extended range)
     // Try original position first, then try offsets (up, left, right, down, diagonals)
@@ -868,7 +864,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         const testX = selectedItem.x + dx;
         const testY = selectedItem.y + dy;
         
-        if (canPlaceItem(tempGrid, tempItem, testX, testY, 0)) {
+        if (canPlaceItem(tempGrid, tempItem, testX, testY)) {
             foundX = testX;
             foundY = testY;
             break;
@@ -877,8 +873,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
     if (foundX !== -1) {
         // Apply Rotation at found coordinates
-        // Store the NEW shape and the NEW rotation value for persistence, but shape is source of truth for visuals.
-        const updateItem = (i: GridItem) => i.id === selectedItem.id ? { ...i, rotation: nextRot, shape: newShape, originalShape: newOriginalShape, x: foundX, y: foundY } : i;
+        const updateItem = (i: GridItem) => i.id === selectedItem.id ? { ...i, rotation: nextRot, shape: newShape, x: foundX, y: foundY } : i;
         
         if (isPlayerInventory) {
              setInventory(prev => {
