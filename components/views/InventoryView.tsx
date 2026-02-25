@@ -19,6 +19,7 @@ interface InventoryViewProps {
   setExternalInventory?: React.Dispatch<React.SetStateAction<InventoryState>> | ((inv: any) => void);
   externalTitle?: string;
   setMetaState?: React.Dispatch<React.SetStateAction<MetaState>>;
+  playerLevel?: number; // 角色素体等级
 }
 
 const CONTAINER_WIDTH = 8;
@@ -40,6 +41,19 @@ const STAT_LABELS: Record<string, string> = {
     'thorns': '荆棘',
     'cleanse': '净化',
     'heal': '治疗'
+};
+
+// 核心系统：基于等级判定玩家网格 (8x5) 对应格子的解锁状态
+const isPlayerCellUnlocked = (x: number, y: number, level: number = 1) => {
+    // 安全区 Zone: (左下 3x3) -> x: 0..2, y: 2..4
+    if (x < 3 && y >= 2) return level === 1 ? (x <= 1 && y === 4) : level === 2 ? (x <= 1 && y >= 3) : true;
+    // 装备区 Zone: (右上 5x2) -> x: 3..7, y: 0..1
+    if (x >= 3 && y < 2) return level === 1 ? x <= 5 : level === 2 ? x <= 6 : true;
+    // 背包区 Zone 1: (左上 3x2) -> 始终全解锁
+    if (x < 3 && y < 2) return true; 
+    // 背包区 Zone 2: (右下 5x3) -> x: 3..7, y: 2..4
+    if (x >= 3 && y >= 2) return level === 1 ? (x <= 5 && y === 2) : level === 2 ? (x <= 5 && y <= 4) : true;
+    return false;
 };
 
 // Helper to determine borders for unified shape look (Robust Version)
@@ -85,7 +99,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     externalInventory,
     setExternalInventory,
     externalTitle,
-    setMetaState
+    setMetaState,
+    playerLevel = 1
 }) => {
   const [isBoxOpen, setIsBoxOpen] = useState(false);
   
@@ -158,6 +173,21 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   // Refs for Grids to calculate hover
   const playerGridRef = useRef<HTMLDivElement>(null);
   const lootGridRef = useRef<HTMLDivElement>(null);
+
+  // Pagination Hover Timer & Validation System
+  const paginationRef = useRef({ page: 0, total: 1 });
+  useEffect(() => { paginationRef.current = { page: warehousePage, total: totalPages }; }, [warehousePage, totalPages]);
+  const edgeScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const checkPlayerLock = (gridType: 'PLAYER' | 'LOOT', item: GridItem, cellX: number, cellY: number) => {
+      if (gridType !== 'PLAYER') return true;
+      for (let r = 0; r < item.shape.length; r++) {
+          for (let c = 0; c < item.shape[0].length; c++) {
+              if (item.shape[r][c] && !isPlayerCellUnlocked(cellX + c, cellY + r, playerLevel)) return false;
+          }
+      }
+      return true;
+  };
 
   // Determine Active Grid for Ghost Rendering (Prevent Double Ghost)
   let activeGhostGrid: 'PLAYER' | 'LOOT' | null = null;
@@ -547,10 +577,28 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               isDragging
           }) : null);
 
-          // --- SMART PREVIEW LOGIC ---
+          // --- SMART PREVIEW LOGIC & EDGE HOVER PAGINATION ---
           if (isDragging) {
               const playerRect = playerGridRef.current?.getBoundingClientRect();
               const lootRect = lootGridRef.current?.getBoundingClientRect();
+
+              // EDGE HOVER PAGINATION
+              if (lootRect && isPaginated) {
+                  const margin = 50; // 悬停触发区宽度 50px
+                  const isNearLeft = e.clientX >= lootRect.left && e.clientX <= lootRect.left + margin && e.clientY >= lootRect.top && e.clientY <= lootRect.bottom;
+                  const isNearRight = e.clientX <= lootRect.right && e.clientX >= lootRect.right - margin && e.clientY >= lootRect.top && e.clientY <= lootRect.bottom;
+                  
+                  const { page, total } = paginationRef.current;
+                  
+                  if (isNearLeft && page > 0) {
+                      if (!edgeScrollTimer.current) edgeScrollTimer.current = setTimeout(() => setWarehousePage(p => Math.max(0, p - 1)), 500);
+                  } else if (isNearRight && page < total - 1) {
+                      if (!edgeScrollTimer.current) edgeScrollTimer.current = setTimeout(() => setWarehousePage(p => Math.min(total - 1, p + 1)), 500);
+                  } else if (edgeScrollTimer.current) {
+                      clearTimeout(edgeScrollTimer.current);
+                      edgeScrollTimer.current = null;
+                  }
+              }
 
               let targetGridType: 'PLAYER' | 'LOOT' | null = null;
               let gridRect = null;
@@ -595,16 +643,28 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                    const tempGrid = rebuildGrid(tempItems, gW, gH);
                    const itemForCheck = dragState.item;
                    
-                   if (!canPlaceItem(tempGrid, itemForCheck, cellX, cellY, targetUnlocked)) {
+                   const isStandardValid = canPlaceItem(tempGrid, itemForCheck, cellX, cellY, targetUnlocked) && checkPlayerLock(targetGridType, itemForCheck, cellX, cellY);
+                   
+                   if (!isStandardValid) {
                         // Collision detected! Try Smart Arrange
                         const rearrangement = findSmartArrangement(tempItems, itemForCheck, cellX, cellY, gW, gH, targetUnlocked);
                         
                         if (rearrangement) {
-                            setSmartPreview({
-                                targetGrid: targetGridType,
-                                movedItems: rearrangement
-                            });
-                            return;
+                            // Smart Arrange Validation (Must respect Player Locks)
+                            let smartValid = true;
+                            if (targetGridType === 'PLAYER') {
+                                if (!checkPlayerLock('PLAYER', itemForCheck, cellX, cellY)) smartValid = false;
+                                for (const m of rearrangement) {
+                                    if (!checkPlayerLock('PLAYER', m, m.x, m.y)) smartValid = false;
+                                }
+                            }
+                            if (smartValid) {
+                                setSmartPreview({
+                                    targetGrid: targetGridType,
+                                    movedItems: rearrangement
+                                });
+                                return;
+                            }
                         }
                    }
               }
@@ -614,6 +674,10 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       };
 
       const handlePointerUp = (e: PointerEvent) => {
+          if (edgeScrollTimer.current) {
+              clearTimeout(edgeScrollTimer.current);
+              edgeScrollTimer.current = null;
+          }
           if (!dragState) return;
 
           if (!dragState.isDragging) {
@@ -632,6 +696,10 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       };
 
       const handlePointerCancel = () => {
+          if (edgeScrollTimer.current) {
+              clearTimeout(edgeScrollTimer.current);
+              edgeScrollTimer.current = null;
+          }
           setDragState(null);
           setSmartPreview(null);
       };
@@ -719,8 +787,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           // 3. Check Placement OR Smart Arrange
           const itemForCheck = state.item;
 
-          // Standard Place
-          if (canPlaceItem(tempTargetGrid, itemForCheck, cellX, cellY, targetUnlocked)) {
+          // Standard Place with Lock Validation
+          if (canPlaceItem(tempTargetGrid, itemForCheck, cellX, cellY, targetUnlocked) && checkPlayerLock(targetGridType, itemForCheck, cellX, cellY)) {
                moveItem(state.item, state.sourceGrid, targetGridType, cellX, cellY);
                return;
           }
@@ -922,7 +990,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         const testX = selectedItem.x + dx;
         const testY = selectedItem.y + dy;
         
-        if (canPlaceItem(tempGrid, tempItem, testX, testY, targetUnlocked)) {
+        if (canPlaceItem(tempGrid, tempItem, testX, testY, targetUnlocked) && checkPlayerLock(isPlayerInventory ? 'PLAYER' : 'LOOT', tempItem, testX, testY)) {
             foundX = testX;
             foundY = testY;
             break;
@@ -1047,12 +1115,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       const isTopLeft = item && item.x === x && item.y === y;
       const isGhostTopLeft = ghostMovedItem && ghostMovedItem.x === x && ghostMovedItem.y === y;
 
-      const isLocked = gridType === 'LOOT' && externalInventory !== undefined && externalInventory.unlockedRows !== undefined && y >= externalInventory.unlockedRows;
+      const isLocked = (gridType === 'LOOT' && externalInventory !== undefined && externalInventory.unlockedRows !== undefined && y >= externalInventory.unlockedRows) ||
+                       (gridType === 'PLAYER' && !isPlayerCellUnlocked(x, y, playerLevel));
 
-      // SAFE ZONE in STORAGE AREA (Left Half of Backpack)
-      const isSafeZone = gridType === 'PLAYER' && x < SAFE_ZONE_WIDTH && y >= EQUIPMENT_ROW_COUNT;
-      const isEquipmentZone = gridType === 'PLAYER' && y < EQUIPMENT_ROW_COUNT;
-      const isBottomRowOfEquipment = gridType === 'PLAYER' && y === EQUIPMENT_ROW_COUNT - 1;
+      // NEW ZONES LOGIC based on 8x5 grid
+      const isSafeZone = gridType === 'PLAYER' && x < 3 && y >= 2;
+      const isEquipmentZone = gridType === 'PLAYER' && x >= 3 && y < 2;
+      const isBottomRowOfEquipment = isEquipmentZone && y === 1;
 
       // Drag Ghost (Where the user's cursor is trying to place)
       let isGhost = false;
@@ -1120,7 +1189,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                            if (dragState.sourceGrid === gridType) tempGrid = removeItemFromGrid(gridData, dragState.item.id);
                            const itemForCheck = { ...dragState.item, rotation: 0 as const };
                            const targetUnlocked = gridType === 'LOOT' ? externalInventory?.unlockedRows : undefined;
-                           isGhostValid = canPlaceItem(tempGrid, itemForCheck, cellX, cellY, targetUnlocked);
+                           isGhostValid = canPlaceItem(tempGrid, itemForCheck, cellX, cellY, targetUnlocked) && checkPlayerLock(gridType, itemForCheck, cellX, cellY);
 
                            // Consumable Stack Check
                            if (!isGhostValid && dragState.item.type === 'CONSUMABLE') {
@@ -1257,7 +1326,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 ${isBottomRowOfEquipment ? 'border-b-4 border-b-black mb-1' : ''}
              `}
           >
-              {isSafeZone && !item && x===0 && y===EQUIPMENT_ROW_COUNT && <LucideShieldCheck size={16} className="absolute top-1 left-1 text-dungeon-gold/20" />}
+              {isSafeZone && !item && x===0 && y===2 && <LucideShieldCheck size={16} className="absolute top-1 left-1 text-dungeon-gold/20" />}
               {isLocked && !item && <div className="absolute inset-0 flex items-center justify-center opacity-20"><LucideLock size={12} className="text-red-500"/></div>}
               {content}
               {ghostContent}
@@ -1336,6 +1405,22 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                                     return Array.from({length: externalInventory ? externalInventory.width : CONTAINER_WIDTH}).map((_, x) => renderCell(x, y, 'LOOT', lootGrid, lootItems))
                                 })}
                                 
+                                {/* Edge Hover Pagination Indicators */}
+                                {isPaginated && dragState && dragState.isDragging && (
+                                    <>
+                                        {warehousePage > 0 && (
+                                            <div className="absolute left-0 top-0 bottom-0 w-[40px] bg-gradient-to-r from-dungeon-gold/10 to-transparent z-40 pointer-events-none flex items-center justify-start pl-2">
+                                                <span className="text-dungeon-gold animate-pulse text-xl font-bold">&lt;</span>
+                                            </div>
+                                        )}
+                                        {warehousePage < totalPages - 1 && (
+                                            <div className="absolute right-0 top-0 bottom-0 w-[40px] bg-gradient-to-l from-dungeon-gold/10 to-transparent z-40 pointer-events-none flex items-center justify-end pr-2">
+                                                <span className="text-dungeon-gold animate-pulse text-xl font-bold">&gt;</span>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+
                                 {externalInventory && externalInventory.unlockedRows !== undefined && externalInventory.unlockedRows < externalInventory.height && (
                                     (() => {
                                         const localY = externalInventory.unlockedRows - startY;
@@ -1446,20 +1531,14 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     style={{ gridTemplateColumns: `repeat(${inventory.width}, 36px)` }}
                 >
                     {/* Markers */}
-                    <div 
-                        className="absolute border-r border-b border-dungeon-gold/40 bg-dungeon-gold/5 pointer-events-none z-0"
-                        style={{
-                            width: `calc((2.25rem + 4px) * ${SAFE_ZONE_WIDTH} - 4px)`,
-                            height: `calc((2.25rem + 4px) * ${inventory.height - EQUIPMENT_ROW_COUNT} - 4px)`, 
-                            top: `calc(0.5rem + (2.25rem + 4px) * ${EQUIPMENT_ROW_COUNT})`, 
-                            left: '0.5rem'
-                        }}
-                    ></div>
-
-                    <div className="absolute top-0 right-0 h-[calc((2.25rem+4px)*2)] flex items-start justify-end p-1 pointer-events-none z-0"><span className="text-[8px] text-stone-600 uppercase writing-mode-vertical">装备</span></div>
-                    <div className="absolute bottom-0 right-0 h-[calc((2.25rem+4px)*4)] flex items-end justify-end p-1 pointer-events-none z-0"><span className="text-[8px] text-stone-800 uppercase writing-mode-vertical">行囊</span></div>
+                    <div className="absolute top-0 right-0 w-[calc((2.25rem+4px)*5)] h-[calc((2.25rem+4px)*2)] flex items-start justify-end p-1 pointer-events-none z-0">
+                        <span className="text-[8px] text-stone-600 uppercase">装备区</span>
+                    </div>
+                    <div className="absolute bottom-0 right-0 h-[calc((2.25rem+4px)*3)] flex items-end justify-end p-1 pointer-events-none z-0">
+                        <span className="text-[8px] text-stone-800 uppercase writing-mode-vertical">背包区</span>
+                    </div>
                     
-                    {Array.from({length: inventory.height}).map((_, y) => 
+                    {Array.from({length: inventory.height}).map((_, y) =>
                         Array.from({length: inventory.width}).map((_, x) => renderCell(x, y, 'PLAYER', inventory.grid, inventory.items))
                     )}
                 </div>
