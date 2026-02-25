@@ -149,10 +149,11 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   // PAGINATION LOGIC (Warehouse Box Mode)
   const [warehousePage, setWarehousePage] = useState(0);
   const isPaginated = !!externalInventory;
-  const rowsPerPage = 7;
-  const totalPages = isPaginated ? Math.ceil((externalInventory?.height || CONTAINER_HEIGHT) / rowsPerPage) : 1;
+  const rowsPerPage = 5; // 修改为单页5行
+  const activeExternalHeight = externalInventory ? externalInventory.height : CONTAINER_HEIGHT;
+  const totalPages = isPaginated ? Math.ceil(activeExternalHeight / rowsPerPage) : 1;
   const startY = isPaginated ? warehousePage * rowsPerPage : 0;
-  const endY = isPaginated ? Math.min(startY + rowsPerPage, externalInventory?.height || CONTAINER_HEIGHT) : CONTAINER_HEIGHT;
+  const endY = isPaginated ? Math.min(startY + rowsPerPage, activeExternalHeight) : CONTAINER_HEIGHT;
 
   // Refs for Grids to calculate hover
   const playerGridRef = useRef<HTMLDivElement>(null);
