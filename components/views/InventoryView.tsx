@@ -1,19 +1,24 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { GridItem, InventoryState } from '../../types';
+import { GridItem, InventoryState, MetaState } from '../../types';
 import { INVENTORY_WIDTH, INVENTORY_HEIGHT, SAFE_ZONE_WIDTH, LOOT_TABLE, EQUIPMENT_ROW_COUNT } from '../../constants';
 import { canPlaceItem, placeItemInGrid, removeItemFromGrid, rotateMatrix, createEmptyGrid, findSmartArrangement } from '../../utils/gridLogic';
 import { LucideRotateCw, LucideTrash2, LucideBox, LucideSearch, LucideCheckCircle, LucideLoader2, LucideArchive, LucideShieldCheck, LucideLock, LucideInfo, LucideZap, LucideX, LucideScanLine, LucideGrab, LucideCoins, LucideEye, LucidePlus } from 'lucide-react';
 
 interface InventoryViewProps {
   inventory: InventoryState;
-  setInventory: React.Dispatch<React.SetStateAction<InventoryState>>;
+  setInventory: React.Dispatch<React.SetStateAction<InventoryState>> | ((inv: InventoryState) => void);
   onFinish: () => void;
   isLootPhase: boolean;
   isCombat?: boolean;
   onConsume?: (item: GridItem) => void; 
   currentStage: number;
   maxStage: number;
+  // New Props for Warehouse Mode
+  externalInventory?: InventoryState;
+  setExternalInventory?: (inv: InventoryState) => void;
+  externalTitle?: string;
+  setMetaState?: React.Dispatch<React.SetStateAction<MetaState>>;
 }
 
 const CONTAINER_WIDTH = 8;
@@ -39,10 +44,10 @@ const STAT_LABELS: Record<string, string> = {
 
 // Helper to determine borders for unified shape look (Robust Version)
 const getSmartBorders = (shape: number[][], r: number, c: number) => {
-    if (!shape || !shape[r]) return {}; 
+    if (!shape || shape.length === 0 || !shape[r]) return {}; 
 
     const h = shape.length;
-    const w = shape[0].length;
+    const w = shape[0]?.length || 0;
     
     // Safe check helper
     const isFilled = (y: number, x: number) => {
@@ -68,10 +73,45 @@ const getSmartBorders = (shape: number[][], r: number, c: number) => {
     };
 };
 
-export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInventory, onFinish, isLootPhase, isCombat = false, onConsume, currentStage, maxStage }) => {
+export const InventoryView: React.FC<InventoryViewProps> = ({ 
+    inventory, 
+    setInventory, 
+    onFinish, 
+    isLootPhase, 
+    isCombat = false, 
+    onConsume, 
+    currentStage, 
+    maxStage,
+    externalInventory,
+    setExternalInventory,
+    externalTitle,
+    setMetaState
+}) => {
   const [isBoxOpen, setIsBoxOpen] = useState(false);
-  const [lootGrid, setLootGrid] = useState<(string | null)[][]>(createEmptyGrid(CONTAINER_WIDTH, CONTAINER_HEIGHT));
-  const [lootItems, setLootItems] = useState<GridItem[]>([]);
+  
+  // If externalInventory is provided, use it. Otherwise, manage local loot state.
+  const [localLootGrid, setLocalLootGrid] = useState<(string | null)[][]>(createEmptyGrid(CONTAINER_WIDTH, CONTAINER_HEIGHT));
+  const [localLootItems, setLocalLootItems] = useState<GridItem[]>([]);
+
+  // Derived State for "Loot" Grid (External)
+  const lootGrid = externalInventory ? externalInventory.grid : localLootGrid;
+  const lootItems = externalInventory ? externalInventory.items : localLootItems;
+  const setLootGrid = (grid: (string | null)[][]) => {
+      if (setExternalInventory && externalInventory) {
+          setExternalInventory({ ...externalInventory, grid });
+      } else {
+          setLocalLootGrid(grid);
+      }
+  };
+  const setLootItems = (items: GridItem[] | ((prev: GridItem[]) => GridItem[])) => {
+      if (setExternalInventory && externalInventory) {
+          // Handle functional update if necessary, though we usually pass direct array
+          const newItems = typeof items === 'function' ? items(externalInventory.items) : items;
+          setExternalInventory({ ...externalInventory, items: newItems });
+      } else {
+          setLocalLootItems(items);
+      }
+  };
   
   // Interaction State
   const [selectedItem, setSelectedItem] = useState<GridItem | null>(null);
@@ -136,7 +176,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
         
         // Create Rectangular Mask for Unidentified State
         const rows = template.shape.length;
-        const cols = template.shape[0].length;
+        const cols = template.shape[0]?.length || 0;
         const rectShape = Array.from({ length: rows }, () => Array(cols).fill(1));
 
         while (!placed && attempts < 20) {
@@ -174,7 +214,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
   const handleAddTestLoot = () => {
       const template = LOOT_TABLE[Math.floor(Math.random() * LOOT_TABLE.length)];
       const rows = template.shape.length;
-      const cols = template.shape[0].length;
+      const cols = template.shape[0]?.length || 0;
       const rectShape = Array.from({ length: rows }, () => Array(cols).fill(1));
       
       let placed = false;
@@ -183,8 +223,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
 
       // Try random positions
       for(let attempt=0; attempt<50; attempt++) {
-           const randX = Math.floor(Math.random() * CONTAINER_WIDTH);
-           const randY = Math.floor(Math.random() * CONTAINER_HEIGHT);
+           const randX = Math.floor(Math.random() * (externalInventory ? externalInventory.width : CONTAINER_WIDTH));
+           const randY = Math.floor(Math.random() * (externalInventory ? externalInventory.height : CONTAINER_HEIGHT));
            
            const newItem: GridItem = {
                ...template,
@@ -193,8 +233,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
                y: randY,
                rotation: 0,
                isIdentified: false,
-               shape: rectShape,
                originalShape: template.shape,
+               shape: rectShape,
                quantity: 1
            };
            
@@ -210,6 +250,68 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
       
       if (!placed) {
           console.log("Loot box full or no space for item");
+      }
+  };
+
+  const handleAddTestItemToPlayer = () => {
+      const template = LOOT_TABLE[Math.floor(Math.random() * LOOT_TABLE.length)];
+      const rows = template.shape.length;
+      const cols = template.shape[0]?.length || 0;
+      const rectShape = Array.from({ length: rows }, () => Array(cols).fill(1));
+      
+      let placed = false;
+      let currentGrid = [...inventory.grid];
+      let newItems = [...inventory.items];
+
+      // Try random positions in Backpack area (Rows >= EQUIPMENT_ROW_COUNT)
+      for(let attempt=0; attempt<50; attempt++) {
+           const randX = Math.floor(Math.random() * INVENTORY_WIDTH);
+           const randY = Math.floor(Math.random() * (INVENTORY_HEIGHT - EQUIPMENT_ROW_COUNT)) + EQUIPMENT_ROW_COUNT;
+           
+           const newItem: GridItem = {
+               ...template,
+               id: `player-test-${Date.now()}`,
+               x: randX,
+               y: randY,
+               rotation: 0,
+               isIdentified: true, // Identify immediately for player test
+               originalShape: template.shape,
+               shape: rectShape,
+               quantity: 1
+           };
+           
+           if (canPlaceItem(currentGrid, newItem, randX, randY)) {
+               const newGrid = placeItemInGrid(currentGrid, newItem, randX, randY);
+               const newInventoryState = {
+                   ...inventory,
+                   items: [...newItems, newItem],
+                   grid: newGrid
+               };
+               
+               // If setMetaState is provided (Warehouse mode), use it to update roster
+               // Actually, setInventory in Warehouse mode IS handleCharacterInventoryUpdate which calls setMetaState
+               // So calling setInventory(newInventoryState) should work IF setInventory is correctly typed and passed.
+               // The error "setMetaState is not a function" happened because setInventory called setMetaState which was undefined.
+               // Now that we passed setMetaState to BaseCampView -> InventoryView, we might not even need to use it here directly if setInventory works.
+               // BUT, let's look at BaseCampView again.
+               // handleCharacterInventoryUpdate calls setMetaState.
+               // So if setMetaState is passed to BaseCampView, it should work.
+               // Wait, the error was "Uncaught TypeError: setMetaState is not a function" inside handleCharacterInventoryUpdate?
+               // Yes, because BaseCampView didn't receive setMetaState from App.tsx?
+               // No, App.tsx passes setMetaState to BaseCampView.
+               // Wait, I checked App.tsx and it WAS NOT passing setMetaState to BaseCampView.
+               // I fixed that in Step 106.
+               
+               // So, simply calling setInventory here should work now.
+               setInventory(newInventoryState);
+               
+               placed = true;
+               break;
+           }
+      }
+      
+      if (!placed) {
+          console.log("Inventory full or no space for item");
       }
   };
 
@@ -268,7 +370,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
                       if (canPlaceItem(currentPlayerGrid, item, x, y)) {
                           // Move logic
                           // 1. Add to player
-                          const newItem = { ...item, x, y };
+                          const newItem = { ...item, x, y, rotation: 0, shape: item.originalShape, originalShape: item.originalShape };
                           currentPlayerGrid = placeItemInGrid(currentPlayerGrid, newItem, x, y);
                           currentPlayerItems.push(newItem);
                           
@@ -337,7 +439,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
   };
 
   const rebuildLootGrid = (items: GridItem[]) => {
-      const g = rebuildGrid(items, CONTAINER_WIDTH, CONTAINER_HEIGHT);
+      const w = externalInventory ? externalInventory.width : CONTAINER_WIDTH;
+      const h = externalInventory ? externalInventory.height : CONTAINER_HEIGHT;
+      const g = rebuildGrid(items, w, h);
       setLootGrid(g);
   };
 
@@ -423,7 +527,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
                   targetGridType = 'LOOT';
                   gridRect = lootRect;
                   gridItems = lootItems;
-                  gW = CONTAINER_WIDTH; gH = CONTAINER_HEIGHT;
+                  gW = externalInventory ? externalInventory.width : CONTAINER_WIDTH; 
+                  gH = externalInventory ? externalInventory.height : CONTAINER_HEIGHT;
               }
 
               if (targetGridType && gridRect) {
@@ -519,8 +624,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
           gridRect = lootRect;
           gridData = lootGrid;
           targetItemsList = lootItems;
-          gridW = CONTAINER_WIDTH;
-          gridH = CONTAINER_HEIGHT;
+          gridW = externalInventory ? externalInventory.width : CONTAINER_WIDTH;
+          gridH = externalInventory ? externalInventory.height : CONTAINER_HEIGHT;
       }
 
       if (targetGridType && gridRect) {
@@ -535,7 +640,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
           
           // 2. CHECK FOR STACKING (Collision with Identical Consumable)
           let collisionItem: GridItem | null = null;
-          if (cellX >= 0 && cellY >= 0 && cellY < gridData.length && cellX < gridData[0].length) {
+          if (cellX >= 0 && cellY >= 0 && cellY < gridData.length && cellX < (gridData[0]?.length || 0)) {
               const targetId = tempTargetGrid[cellY][cellX];
               if (targetId) {
                   collisionItem = targetItemsList.find(i => i.id === targetId) || null;
@@ -610,7 +715,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
       });
 
       // 4. Add the dragged item to the list at new pos
-      const newItem = { ...draggedItem, x: targetX, y: targetY, rotation: 0 as const };
+      const newItem = { ...draggedItem, x: targetX, y: targetY, rotation: 0 as const, shape: draggedItem.originalShape, originalShape: draggedItem.originalShape };
       updatedItems.push(newItem);
 
       // 5. Commit to State
@@ -659,7 +764,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
   };
 
   const moveItem = (item: GridItem, source: 'PLAYER' | 'LOOT', target: 'PLAYER' | 'LOOT', x: number, y: number) => {
-      const newItem = { ...item, x, y };
+      const newItem = { ...item, x, y, rotation: 0, shape: item.originalShape, originalShape: item.originalShape };
       
       // Update Source List
       if (source === 'PLAYER') {
@@ -867,10 +972,11 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
       if (smartPreview && smartPreview.targetGrid === gridType) {
           // Find if any moved item occupies (x,y)
           ghostMovedItem = smartPreview.movedItems.find(i => {
+              if (!i.shape || i.shape.length === 0) return false;
               const dx = x - i.x;
               const dy = y - i.y;
-              if (dx >= 0 && dy >= 0 && dy < i.shape.length && dx < i.shape[0].length) {
-                  return i.shape[dy][dx] === 1;
+              if (dx >= 0 && dy >= 0 && dy < i.shape.length && dx < (i.shape[0]?.length || 0)) {
+                  return i.shape[dy] && i.shape[dy][dx] === 1;
               }
               return false;
           });
@@ -895,21 +1001,36 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
            const rect = gridType === 'PLAYER' ? playerGridRef.current?.getBoundingClientRect() : lootGridRef.current?.getBoundingClientRect();
            if (rect) {
                const stride = CELL_SIZE + CELL_GAP;
-               const relativeX = dragState.currentX - rect.left - dragState.grabOffsetX;
-               const relativeY = dragState.currentY - rect.top - dragState.grabOffsetY;
+               // Calculate relative position within the grid container
+               // We need to account for the scroll position if the container is scrollable, 
+               // but currently our grids are fixed size.
+               // However, we must ensure we are using clientX/Y correctly relative to the grid's viewport position.
+               
+               // The logic below assumes drag position is global client coordinates.
+               // rect.left/top are also global client coordinates.
+               const relativeX = dragState.currentX - rect.left;
+               const relativeY = dragState.currentY - rect.top;
+               
+               // Adjust for grab offset to find the top-left of the item
+               const itemTopLeftX = relativeX - dragState.grabOffsetX;
+               const itemTopLeftY = relativeY - dragState.grabOffsetY;
                
                // Get Grid Dimensions based on Type
-               const gH = gridType === 'PLAYER' ? INVENTORY_HEIGHT : CONTAINER_HEIGHT;
-               const gW = gridType === 'PLAYER' ? INVENTORY_WIDTH : CONTAINER_WIDTH;
+               const gH = gridType === 'PLAYER' ? INVENTORY_HEIGHT : (externalInventory ? externalInventory.height : CONTAINER_HEIGHT);
+               const gW = gridType === 'PLAYER' ? INVENTORY_WIDTH : (externalInventory ? externalInventory.width : CONTAINER_WIDTH);
 
-               // Apply exact same stride & clamping logic as drop for consistency
-               const cellX = Math.max(0, Math.min(Math.round(relativeX / stride), gW - 1));
-               const cellY = Math.max(0, Math.min(Math.round(relativeY / stride), gH - 1));
+               // Calculate cell index
+               // We use Math.round to snap to nearest cell center
+               const cellX = Math.round(itemTopLeftX / stride);
+               const cellY = Math.round(itemTopLeftY / stride);
                
+               // Check if this specific cell (x,y) is part of the ghost shape at (cellX, cellY)
                const dx = x - cellX;
                const dy = y - cellY;
-               if (dx >= 0 && dy >= 0 && dy < dragState.item.shape.length && dx < dragState.item.shape[0].length) {
-                   if (dragState.item.shape[dy][dx] === 1) {
+               
+               if (dragState.item.shape && dragState.item.shape.length > 0 && 
+                   dx >= 0 && dy >= 0 && dy < dragState.item.shape.length && dx < (dragState.item.shape[0]?.length || 0)) {
+                   if (dragState.item.shape[dy] && dragState.item.shape[dy][dx] === 1) {
                        isGhost = true;
                        
                        // Validity Logic
@@ -986,7 +1107,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
                             className="absolute z-50 flex items-center justify-center pointer-events-auto"
                             style={{
                                 top: '-1px', left: '-1px',
-                                width: `${item.shape[0].length * CELL_SIZE + (item.shape[0].length - 1) * CELL_GAP}px`,
+                                width: `${(item.shape[0]?.length || 1) * CELL_SIZE + ((item.shape[0]?.length || 1) - 1) * CELL_GAP}px`,
                                 height: `${item.shape.length * CELL_SIZE + (item.shape.length - 1) * CELL_GAP}px`
                             }}
                             onClick={() => handleSearchItem(item)}
@@ -994,7 +1115,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
                             {!isSearching && (
                                 <button 
                                     className="bg-black/80 p-1.5 rounded-full border border-stone-500/50 backdrop-blur-sm shadow-xl animate-pulse z-50 hover:scale-110 hover:border-dungeon-gold transition-all"
-                                    style={{ transform: (item.shape.length === 1 && item.shape[0].length === 1) ? 'scale(0.85)' : 'scale(1)' }}
+                                    style={{ transform: (item.shape.length === 1 && (item.shape[0]?.length || 1) === 1) ? 'scale(0.85)' : 'scale(1)' }}
                                 >
                                     <LucideScanLine size={18} className="text-dungeon-gold" />
                                 </button>
@@ -1017,7 +1138,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
                        <div 
                             className="absolute top-0 left-0 z-[60] flex items-center justify-center pointer-events-none"
                             style={{
-                                width: `${item.shape[0].length * CELL_SIZE + (item.shape[0].length - 1) * CELL_GAP}px`,
+                                width: `${(item.shape[0]?.length || 1) * CELL_SIZE + ((item.shape[0]?.length || 1) - 1) * CELL_GAP}px`,
                                 height: `${item.shape.length * CELL_SIZE + (item.shape.length - 1) * CELL_GAP}px`
                             }}
                        >
@@ -1054,7 +1175,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
              className={`
                 w-9 h-9 border relative select-none
                 ${isTopLeft || isGhostTopLeft ? 'z-40' : 'z-0'} 
-                ${isSafeZone ? 'bg-dungeon-gold/5 border-dungeon-gold/20' : isEquipmentZone ? 'bg-[#1a1a1a] border-stone-800' : 'bg-black/80 border-stone-900'}
+                ${isSafeZone ? 'bg-dungeon-gold/5 border-dungeon-gold/20' : isEquipmentZone ? 'bg-[#1a1a1a] border-stone-800' : 'bg-stone-900/70 border-stone-700'}
                 ${isBottomRowOfEquipment ? 'border-b-4 border-b-black mb-1' : ''}
              `}
           >
@@ -1073,13 +1194,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
       
       <div className="absolute inset-0 bg-noise opacity-5 pointer-events-none"></div>
 
-      {/* Main Container - Scrollable if content too tall */}
-      <div className="flex-1 flex flex-col w-full h-full overflow-y-auto">
+      {/* Main Container - Flex Column to fit both grids */}
+      <div className="flex-1 flex flex-col w-full h-full overflow-hidden">
 
-        {/* LOOT SECTION */}
-        {isLootPhase && (
-            <div className="flex-1 flex flex-col items-center justify-center p-4 relative min-h-[280px] border-b-4 border-stone-800 bg-stone-950/80">
-                {!isBoxOpen ? (
+        {/* LOOT / EXTERNAL SECTION */}
+        {(isLootPhase || externalInventory) && (
+            <div className={`flex flex-col items-center justify-center p-2 relative border-b-4 border-stone-800 bg-stone-950/80 shrink-0 ${externalInventory ? 'flex-1 min-h-0 overflow-hidden' : 'min-h-[280px]'}`}>
+                {isLootPhase && !isBoxOpen && !externalInventory ? (
                     <div className="flex flex-col items-center cursor-pointer group animate-float" onClick={() => setIsBoxOpen(true)}>
                         <LucideBox size={80} strokeWidth={1} className="text-stone-600 group-hover:text-dungeon-gold transition-colors fill-stone-900" />
                         <div className="mt-4 text-sm font-display font-bold text-stone-500 group-hover:text-dungeon-gold tracking-widest bg-black px-6 py-2 border border-stone-700 group-hover:border-dungeon-gold shadow-lg transition-all">
@@ -1087,25 +1208,27 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
                         </div>
                     </div>
                 ) : (
-                    <div className="w-full max-w-[340px] flex flex-col items-center">
-                        <div className="flex justify-between w-full mb-3 px-1 border-b border-stone-800 pb-2">
+                    <div className="w-full max-w-[400px] h-full flex flex-col items-center">
+                        <div className="flex justify-between w-full mb-2 px-1 border-b border-stone-800 pb-1 shrink-0">
                             <div className="flex items-center gap-2">
                                 <span className="text-xs text-dungeon-gold font-display uppercase tracking-widest flex items-center gap-1">
-                                    <LucideBox size={14} /> 战利品箱
+                                    <LucideBox size={14} /> {externalTitle || '战利品箱'}
                                 </span>
                                 {searchingItemId && <span className="text-[10px] text-stone-500 animate-pulse">正在解码...</span>}
                             </div>
                             
                             <div className="flex gap-2">
-                                {/* Test Button */}
-                                <button 
-                                    onClick={handleAddTestLoot}
-                                    className="flex items-center gap-1 text-[10px] bg-stone-800 hover:bg-stone-700 text-stone-400 px-2 py-1 rounded border border-stone-600"
-                                >
-                                    <LucidePlus size={12} /> 测试
-                                </button>
-                                {/* Take All Button */}
-                                {lootItems.some(i => i.isIdentified) && (
+                                {/* Test Button - Only in Loot Phase */}
+                                {isLootPhase && !externalInventory && (
+                                    <button 
+                                        onClick={handleAddTestLoot}
+                                        className="flex items-center gap-1 text-[10px] bg-stone-800 hover:bg-stone-700 text-stone-400 px-2 py-1 rounded border border-stone-600"
+                                    >
+                                        <LucidePlus size={12} /> 测试
+                                    </button>
+                                )}
+                                {/* Take All Button - Only in Loot Phase */}
+                                {isLootPhase && !externalInventory && lootItems.some(i => i.isIdentified) && (
                                     <button 
                                         onClick={handleTakeAll}
                                         className="flex items-center gap-1 text-[10px] bg-stone-800 hover:bg-stone-700 text-dungeon-gold px-2 py-1 rounded border border-stone-600"
@@ -1116,7 +1239,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
                             </div>
                         </div>
                         
-                        <div className="relative p-1 bg-gradient-to-b from-stone-800 to-black rounded-sm border border-stone-700 shadow-inner">
+                        <div className="relative p-1 bg-gradient-to-b from-stone-800 to-black rounded-sm border border-stone-700 shadow-inner flex-1 overflow-auto min-h-0 w-full flex justify-center">
                             <div className="absolute top-0 left-0 w-2 h-2 border-t border-l border-stone-500"></div>
                             <div className="absolute top-0 right-0 w-2 h-2 border-t border-r border-stone-500"></div>
                             <div className="absolute bottom-0 left-0 w-2 h-2 border-b border-l border-stone-500"></div>
@@ -1124,11 +1247,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
                             
                             <div 
                                 ref={lootGridRef}
-                                className="grid gap-1 bg-black/80"
-                                style={{ gridTemplateColumns: `repeat(${CONTAINER_WIDTH}, minmax(0, 1fr))` }}
+                                className="grid gap-1 bg-black/80 m-auto"
+                                style={{ 
+                                    gridTemplateColumns: `repeat(${externalInventory ? externalInventory.width : CONTAINER_WIDTH}, 36px)` 
+                                }}
                             >
-                                {Array.from({length: CONTAINER_HEIGHT}).map((_, y) => 
-                                    Array.from({length: CONTAINER_WIDTH}).map((_, x) => renderCell(x, y, 'LOOT', lootGrid, lootItems))
+                                {Array.from({length: externalInventory ? externalInventory.height : CONTAINER_HEIGHT}).map((_, y) => 
+                                    Array.from({length: externalInventory ? externalInventory.width : CONTAINER_WIDTH}).map((_, x) => renderCell(x, y, 'LOOT', lootGrid, lootItems))
                                 )}
                             </div>
                         </div>
@@ -1138,7 +1263,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
         )}
 
         {/* PLAYER SECTION */}
-        <div className={`w-full bg-dungeon-dark border-t-2 border-stone-800 z-30 shrink-0 flex flex-col shadow-[0_-10px_50px_rgba(0,0,0,0.8)] pb-12 pt-2 ${!isLootPhase ? 'h-full justify-center' : ''}`}>
+        <div className={`w-full bg-dungeon-dark border-t-2 border-stone-800 z-30 shrink-0 flex flex-col shadow-[0_-10px_50px_rgba(0,0,0,0.8)] pb-12 pt-2 ${!isLootPhase && !externalInventory ? 'h-full justify-center' : 'h-auto'}`}>
             
             {/* Info / Action Bar */}
             <div className="min-h-[48px] px-4 py-2 bg-black/40 border-b border-stone-800 mb-2 flex items-center justify-between">
@@ -1172,7 +1297,18 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
                         </div>
                     </div>
                 ) : (
-                    <div className="text-[10px] text-stone-500 italic w-full text-center">点击物品查看详情 · 拖拽整理</div>
+                    <div className="flex items-center justify-between w-full">
+                        <div className="text-[10px] text-stone-500 italic">点击物品查看详情 · 拖拽整理</div>
+                        {/* Test Button for Player Inventory (Only in Base Camp / Warehouse) */}
+                        {externalInventory && (
+                            <button 
+                                onClick={handleAddTestItemToPlayer}
+                                className="flex items-center gap-1 text-[10px] bg-stone-800 hover:bg-stone-700 text-stone-400 px-2 py-1 rounded border border-stone-600"
+                            >
+                                <LucidePlus size={12} /> 测试物资
+                            </button>
+                        )}
+                    </div>
                 )}
             </div>
 
@@ -1180,7 +1316,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
                 <div 
                     ref={playerGridRef}
                     className="grid gap-1 bg-black p-2 border-2 border-stone-700 shadow-2xl relative"
-                    style={{ gridTemplateColumns: `repeat(${INVENTORY_WIDTH}, minmax(0, 1fr))` }}
+                    style={{ gridTemplateColumns: `repeat(${INVENTORY_WIDTH}, 36px)` }}
                 >
                     {/* Markers */}
                     {/* Safe Zone Visual Indicator - Moved to Storage Area (Row 2, Col 0, 4 wide, 4 high) */}
@@ -1224,7 +1360,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({ inventory, setInve
                 transform: `translate(-${dragState.grabOffsetX}px, -${dragState.grabOffsetY}px)`
             }}
           >
-              <div className="grid gap-px p-1" style={{ gridTemplateColumns: `repeat(${dragState.item.shape[0].length}, 36px)` }}>
+              <div className="grid gap-px p-1" style={{ gridTemplateColumns: `repeat(${dragState.item.shape[0]?.length || 1}, 36px)` }}>
                   {dragState.item.shape.map((row, r) => 
                      row.map((cell, c) => {
                          // Apply same smart border logic to drag preview

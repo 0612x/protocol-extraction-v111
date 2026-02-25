@@ -1,5 +1,5 @@
 
-export type GamePhase = 'MENU' | 'COMBAT' | 'DRAFT' | 'LOOT' | 'EXTRACTION' | 'META' | 'GAME_OVER';
+export type GamePhase = 'MENU' | 'COMBAT' | 'DRAFT' | 'LOOT' | 'EXTRACTION' | 'META' | 'GAME_OVER' | 'BASE_CAMP' | 'WAREHOUSE';
 
 export enum CardType {
   STRIKE = 'STRIKE',
@@ -14,6 +14,69 @@ export enum CardType {
   THUNDER = 'THUNDER',
   POISON = 'POISON'
 }
+
+// --- META PROGRESSION TYPES ---
+
+export enum ResourceType {
+  GOLD = 'GOLD',           // Basic currency
+  SOULS = 'SOULS',         // Rare currency from bosses/elites
+  TECH_SCRAP = 'TECH_SCRAP', // Crafting material
+  INSIGHT = 'INSIGHT'      // Meta-knowledge/Experience
+}
+
+export interface MetaState {
+  resources: Record<ResourceType, number>;
+  buildings: Record<BuildingType, BuildingState>;
+  unlockedBlueprints: string[]; // IDs of unlocked blueprints
+  unlockedItems: string[];      // IDs of unlocked items
+  runHistory: RunRecord[];
+  warehouse: InventoryState;    // Persistent storage grid
+  roster: Character[];          // Recruited characters
+}
+
+export interface Character {
+  id: string;
+  name: string;
+  class: 'OPERATOR' | 'GHOST' | 'CONSTRUCT';
+  level: number;
+  exp: number;
+  stats: PlayerStats;       // Current combat stats/deck
+  inventory: InventoryState; // Equipped items and backpack
+}
+
+export interface RunRecord {
+  id: string;
+  date: number;
+  depthReached: number;
+  resourcesGained: Record<ResourceType, number>;
+  outcome: 'VICTORY' | 'DEFEAT' | 'ABANDONED';
+}
+
+export enum BuildingType {
+  NEXUS = 'NEXUS',             // Main Hub / Town Hall
+  ARMORY = 'ARMORY',           // Upgrade Starting Gear
+  SANCTUARY = 'SANCTUARY',     // Heal / Remove Trauma (Future)
+  LABORATORY = 'LABORATORY',   // Unlock new Blueprints/Items
+  BLACK_MARKET = 'BLACK_MARKET' // Trade resources
+}
+
+export interface BuildingState {
+  type: BuildingType;
+  level: number;
+  isUnlocked: boolean;
+}
+
+export interface Upgrade {
+  id: string;
+  name: string;
+  description: string;
+  buildingType: BuildingType;
+  tier: number;
+  cost: Record<ResourceType, number>;
+  effect: (player: PlayerStats) => PlayerStats; // Functional effect on start
+}
+
+// --- END META PROGRESSION TYPES ---
 
 export interface CardData {
   id: string;
@@ -58,7 +121,7 @@ export interface PlayerStats {
 export interface GridItem {
   id: string;
   shape: number[][];
-  originalShape?: number[][]; // For unidentified items (hidden shape)
+  originalShape: number[][]; // For unidentified items (hidden shape)
   color: string;
   type: 'CONSUMABLE' | 'ARTIFACT' | 'LOOT'; // New types
   rarity: 'COMMON' | 'RARE' | 'LEGENDARY';

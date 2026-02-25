@@ -1,11 +1,13 @@
 
 import React, { useState, useEffect } from 'react';
-import { GamePhase, PlayerStats, Enemy, InventoryState, CardType, Blueprint, GridItem } from './types';
+import { GamePhase, PlayerStats, Enemy, InventoryState, CardType, Blueprint, GridItem, MetaState, ResourceType, BuildingType, Character } from './types';
 import { INVENTORY_WIDTH, INVENTORY_HEIGHT, STARTING_BLUEPRINTS, BLUEPRINT_POOL, SAFE_ZONE_WIDTH, STAGES_PER_DEPTH, EQUIPMENT_ROW_COUNT } from './constants';
-import { createEmptyGrid, removeItemFromGrid } from './utils/gridLogic';
+import { createEmptyGrid, removeItemFromGrid, placeItemInGrid } from './utils/gridLogic';
 import { CombatView } from './components/views/CombatView';
 import { InventoryView } from './components/views/InventoryView';
 import { MetaView } from './components/views/MetaView';
+import { BaseCampView } from './components/views/BaseCampView';
+import { WarehouseView } from './components/views/WarehouseView';
 import { ExtractionView } from './components/views/ExtractionView';
 import { DraftView } from './components/views/DraftView';
 import { LucideX, LucideSkull } from 'lucide-react';
@@ -32,8 +34,64 @@ const INITIAL_INVENTORY: InventoryState = {
   height: INVENTORY_HEIGHT
 };
 
+const INITIAL_META_STATE: MetaState = {
+  resources: {
+    [ResourceType.GOLD]: 100,
+    [ResourceType.SOULS]: 0,
+    [ResourceType.TECH_SCRAP]: 5,
+    [ResourceType.INSIGHT]: 0
+  },
+  buildings: {
+    [BuildingType.NEXUS]: { type: BuildingType.NEXUS, level: 1, isUnlocked: true },
+    [BuildingType.ARMORY]: { type: BuildingType.ARMORY, level: 0, isUnlocked: true },
+    [BuildingType.SANCTUARY]: { type: BuildingType.SANCTUARY, level: 0, isUnlocked: false },
+    [BuildingType.LABORATORY]: { type: BuildingType.LABORATORY, level: 0, isUnlocked: true },
+    [BuildingType.BLACK_MARKET]: { type: BuildingType.BLACK_MARKET, level: 0, isUnlocked: false }
+  },
+  unlockedBlueprints: [],
+  unlockedItems: [],
+  runHistory: [],
+  warehouse: {
+    grid: createEmptyGrid(INVENTORY_WIDTH, INVENTORY_HEIGHT),
+    items: [],
+    width: INVENTORY_WIDTH,
+    height: INVENTORY_HEIGHT
+  },
+  roster: [
+    {
+      id: 'char-001',
+      name: 'Alpha-01',
+      class: 'OPERATOR',
+      level: 1,
+      exp: 0,
+      stats: INITIAL_PLAYER,
+      inventory: INITIAL_INVENTORY
+    }
+  ]
+};
+
 export default function App() {
   const [phase, setPhase] = useState<GamePhase>('MENU');
+  const [metaState, setMetaState] = useState<MetaState>(() => {
+    const saved = localStorage.getItem('rogue-ttrpg-meta');
+    const initialState = saved ? JSON.parse(saved) : INITIAL_META_STATE;
+
+    // Data Migration: Ensure all items have originalShape
+    initialState.roster?.forEach(char => {
+        char.inventory?.items?.forEach(item => {
+            if (!item.originalShape) {
+                item.originalShape = item.shape;
+            }
+        });
+    });
+    initialState.warehouse?.items?.forEach(item => {
+        if (!item.originalShape) {
+            item.originalShape = item.shape;
+        }
+    });
+
+    return initialState;
+  });
   const [player, setPlayer] = useState<PlayerStats>(INITIAL_PLAYER);
   const [inventory, setInventory] = useState<InventoryState>(INITIAL_INVENTORY);
   const [depth, setDepth] = useState(1);
@@ -44,6 +102,11 @@ export default function App() {
   
   // Developer Tools
   const [isGodMode, setIsGodMode] = useState(false);
+
+  // --- LOCALSTORAGE PERSISTENCE ---
+  useEffect(() => {
+    localStorage.setItem('rogue-ttrpg-meta', JSON.stringify(metaState));
+  }, [metaState]);
 
   // --- STATS CALCULATION (Passive Effects) ---
   useEffect(() => {
@@ -158,10 +221,83 @@ export default function App() {
     };
   };
 
-  const startRun = () => {
-    setPlayer(INITIAL_PLAYER);
-    // Inventory might persist via Meta logic later, but for now reset
-    setInventory(INITIAL_INVENTORY); 
+  const enterBaseCamp = () => {
+    setPhase('BASE_CAMP');
+  };
+
+  const handleLoseCombat = () => {
+    // On Death: Only keep items in Safe Zone
+    const safeItems = inventory.items.filter(item => {
+        const isInSafeRow = item.y >= EQUIPMENT_ROW_COUNT;
+        const isInSafeCol = item.x < SAFE_ZONE_WIDTH;
+        return isInSafeRow && isInSafeCol;
+    });
+    
+    setMetaState(prev => {
+        const char = prev.roster[0];
+        let newGrid = createEmptyGrid(INVENTORY_WIDTH, INVENTORY_HEIGHT);
+        
+        // Reconstruct grid for saved items
+        safeItems.forEach(item => {
+             // FIX: Pass rotation: 0 because 'item.shape' is already rotated in state.
+             const itemForPlacement = { ...item, rotation: 0 as const };
+             newGrid = placeItemInGrid(newGrid, itemForPlacement, item.x, item.y);
+        });
+
+        const newChar = {
+            ...char,
+            inventory: {
+                ...char.inventory,
+                items: safeItems,
+                grid: newGrid
+            }
+        };
+        return { ...prev, roster: [newChar, ...prev.roster.slice(1)] };
+    });
+
+    alert(`理智耗尽... 非保留区的战利品已全部遗失。仅保留了 ${safeItems.length} 件物品。`);
+    setPhase('BASE_CAMP');
+  };
+
+  const handleExtract = () => {
+    // On Extract: Keep ALL items
+    const allItems = inventory.items;
+
+    setMetaState(prev => {
+        const char = prev.roster[0];
+        let newGrid = createEmptyGrid(INVENTORY_WIDTH, INVENTORY_HEIGHT);
+        
+        // Reconstruct grid
+        allItems.forEach(item => {
+             // FIX: Pass rotation: 0 because 'item.shape' is already rotated in state.
+             const itemForPlacement = { ...item, rotation: 0 as const };
+             newGrid = placeItemInGrid(newGrid, itemForPlacement, item.x, item.y);
+        });
+
+        const newChar = {
+            ...char,
+            inventory: {
+                ...char.inventory,
+                items: allItems,
+                grid: newGrid
+            }
+        };
+        return { ...prev, roster: [newChar, ...prev.roster.slice(1)] };
+    });
+    
+    alert(`成功撤离！带回了 ${inventory.items.length} 件遗物。`);
+    setPhase('BASE_CAMP');
+  };
+
+  const startExpedition = (charId?: string) => {
+    // Load state from selected character in Roster
+    const char = charId 
+        ? metaState.roster.find(c => c.id === charId) || metaState.roster[0]
+        : metaState.roster[0];
+
+    setPlayer(char.stats);
+    setInventory(char.inventory);
+
     setDepth(1);
     setStage(1);
     startCombat(1, 1);
@@ -216,22 +352,6 @@ export default function App() {
       setPhase('LOOT');
   };
 
-  const handleLoseCombat = () => {
-    // Punishment: Lose all items NOT in the Safe Zone
-    // Safe zone is now defined by SAFE_ZONE_WIDTH constant (Columns < Width) in the Backpack area (Rows >= Equip)
-    const savedItems = inventory.items.filter(item => {
-        const isInSafeRow = item.y >= EQUIPMENT_ROW_COUNT;
-        const isInSafeCol = item.x < SAFE_ZONE_WIDTH;
-        return isInSafeRow && isInSafeCol;
-    });
-    
-    alert(`理智耗尽... 非保留区的战利品已全部遗失。仅保留了 ${savedItems.length} 件物品。`);
-    
-    setPlayer(INITIAL_PLAYER);
-    setInventory({ ...inventory, items: savedItems, grid: createEmptyGrid(INVENTORY_WIDTH, INVENTORY_HEIGHT) });
-    setPhase('MENU');
-  };
-
   const handleLootDone = () => {
     // RESET STATUSES AND SHIELD between stages
     // Keep HP and Deck
@@ -255,9 +375,24 @@ export default function App() {
     startCombat(depth + 1, 1);
   };
 
-  const handleExtract = () => {
-    alert(`成功撤离！带回了 ${inventory.items.length} 件遗物。 (结算逻辑待实装)`);
-    setPhase('MENU');
+  const handleUpgradeBuilding = (type: BuildingType) => {
+    setMetaState(prev => {
+        const building = prev.buildings[type];
+        if (!building) return prev;
+        
+        // TODO: Cost check logic here
+        
+        return {
+            ...prev,
+            buildings: {
+                ...prev.buildings,
+                [type]: {
+                    ...building,
+                    level: building.level + 1
+                }
+            }
+        };
+    });
   };
 
   const handleConsumeItem = (item: GridItem) => {
@@ -295,7 +430,24 @@ export default function App() {
 
   return (
     <div className="relative w-full h-[100dvh] md:max-w-[480px] md:h-[90vh] md:max-h-[900px] bg-neutral-900 text-stone-200 font-serif overflow-hidden md:shadow-2xl md:border border-stone-800 flex flex-col">
-      {phase === 'MENU' && <MetaView onStartRun={startRun} playerLevel={1} />}
+      {phase === 'MENU' && <MetaView onStartRun={enterBaseCamp} playerLevel={1} />}
+      
+      {phase === 'BASE_CAMP' && (
+        <BaseCampView 
+            metaState={metaState} 
+            setMetaState={setMetaState}
+            onStartRun={startExpedition}
+            onUpgradeBuilding={handleUpgradeBuilding}
+        />
+      )}
+
+      {phase === 'WAREHOUSE' && (
+        <WarehouseView 
+          metaState={metaState}
+          setMetaState={setMetaState}
+          onBack={() => setPhase('BASE_CAMP')}
+        />
+      )}
       
       {phase === 'COMBAT' && enemy && (
         <>

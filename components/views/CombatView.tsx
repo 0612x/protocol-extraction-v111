@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { CardType, Enemy, PlayerStats, Blueprint, EnemyIntent } from '../../types';
 import { CARD_DEFINITIONS, HAND_SIZE, MAX_BUFFER_SIZE, DRAW_AMOUNT, STARTING_BLUEPRINTS, BLUEPRINT_POOL } from '../../constants';
 import { Card } from '../ui/Card';
-import { LucideSword, LucideShield, LucideBookOpen, LucideX, LucideGhost, LucideHeart, LucideEye, LucideTrash2, LucideDroplets, LucideFlame, LucideSnowflake, LucideZap, LucideBiohazard, LucideBrain, LucideSprout, LucideTrendingUp, LucideHeartCrack, LucideBicepsFlexed, LucidePlus, LucideOrbit, LucideChevronsUp, LucideBackpack, LucideScrollText, LucideTarget, LucideLock, LucideDownload, LucideSkull, LucideHourglass, LucideUndo2, LucideFilter } from 'lucide-react';
+import { LucideSword, LucideShield, LucideBookOpen, LucideX, LucideGhost, LucideHeart, LucideEye, LucideTrash2, LucideDroplets, LucideFlame, LucideSnowflake, LucideZap, LucideBiohazard, LucideBrain, LucideSprout, LucideTrendingUp, LucideHeartCrack, LucideBicepsFlexed, LucidePlus, LucideOrbit, LucideChevronsUp, LucideBackpack, LucideScrollText, LucideTarget, LucideLock, LucideDownload, LucideSkull, LucideHourglass, LucideUndo2, LucideFilter, LucideLayers } from 'lucide-react';
 
 interface CombatViewProps {
   enemy: Enemy;
@@ -15,6 +15,7 @@ interface CombatViewProps {
   updatePlayer: (stats: PlayerStats | ((prev: PlayerStats) => PlayerStats)) => void;
   onOpenInventory: () => void;
   isGodMode: boolean;
+  combatType?: 'NORMAL' | 'EXTRACTION';
 }
 
 // Visual Effect Type
@@ -76,11 +77,13 @@ const getBlueprintCategory = (bp: Blueprint): string => {
     return 'PHYSICAL';
 };
 
-export const CombatView: React.FC<CombatViewProps> = ({ enemy: initialEnemy, player, currentStage, maxStage, onWin, onLose, updatePlayer, onOpenInventory, isGodMode }) => {
+export const CombatView: React.FC<CombatViewProps> = ({ enemy: initialEnemy, player, currentStage, maxStage, onWin, onLose, updatePlayer, onOpenInventory, isGodMode, combatType = 'NORMAL' }) => {
   const [enemy, setEnemy] = useState<Enemy>(initialEnemy);
   const [hand, setHand] = useState<HandCard[]>([]);
   const [buffer, setBuffer] = useState<CardType[]>([]);
   
+  const [lastDrawAmount, setLastDrawAmount] = useState(DRAW_AMOUNT);
+
   // Animation States
   const [pollutedBufferIndex, setPollutedBufferIndex] = useState<number | null>(null);
 
@@ -95,6 +98,18 @@ export const CombatView: React.FC<CombatViewProps> = ({ enemy: initialEnemy, pla
   const [screenFlash, setScreenFlash] = useState<string | null>(null);
   const [showComboList, setShowComboList] = useState(false);
   const [showLogModal, setShowLogModal] = useState(false);
+
+  // --- CHECK WIN/LOSS ---
+  useEffect(() => {
+      if (player.currentHp <= 0 && !isGodMode) {
+          onLose();
+      } else if (enemy.currentHp <= 0) {
+          onWin();
+      } else if (combatType === 'EXTRACTION' && turn > 3) {
+          // Survival Win Condition
+          onWin();
+      }
+  }, [player.currentHp, enemy.currentHp, turn, combatType, isGodMode]);
   
   // Archive Modal State
   const [archiveCategory, setArchiveCategory] = useState<string>('ALL');
@@ -272,6 +287,7 @@ export const CombatView: React.FC<CombatViewProps> = ({ enemy: initialEnemy, pla
   };
 
   const drawCards = (amount: number) => {
+    setLastDrawAmount(amount);
     const newCards: HandCard[] = [];
     for (let i = 0; i < amount; i++) {
       newCards.push({
@@ -1968,6 +1984,16 @@ export const CombatView: React.FC<CombatViewProps> = ({ enemy: initialEnemy, pla
               <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/wood-pattern.png')] opacity-5 mix-blend-overlay pointer-events-none"></div>
               <div className="absolute top-0 left-0 w-full h-16 bg-gradient-to-b from-black to-transparent pointer-events-none z-10"></div>
               
+              {/* Deck Visual */}
+              <div className="absolute bottom-8 left-6 w-16 h-24 bg-stone-900 border border-stone-700 rounded shadow-xl rotate-[-5deg] z-20 flex items-center justify-center group cursor-pointer hover:-translate-y-1 transition-transform hidden md:flex">
+                  <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/black-felt.png')] opacity-20"></div>
+                  {/* Stack effect */}
+                  <div className="absolute -top-0.5 -right-0.5 w-full h-full bg-stone-800 border border-stone-600 rounded -z-10"></div>
+                  <div className="absolute -top-1 -right-1 w-full h-full bg-stone-800 border border-stone-600 rounded -z-20"></div>
+                  <LucideLayers size={20} className="text-stone-600 group-hover:text-stone-400 transition-colors" />
+                  <div className="absolute -bottom-5 text-[9px] font-mono text-stone-600 font-bold tracking-widest">DECK</div>
+              </div>
+
               <div className="absolute bottom-0 left-1/2 w-0 h-full z-20">
                 {hand.map((cardObj, idx) => {
                    const card = cardObj.type;
@@ -2006,7 +2032,7 @@ export const CombatView: React.FC<CombatViewProps> = ({ enemy: initialEnemy, pla
                               touchAction: 'none'
                           }}
                        >
-                          <div className="w-full h-full animate-draw-card" style={{ animationFillMode: 'backwards', animationDelay: `${Math.max(0, idx - (total - DRAW_AMOUNT)) * 0.1}s` }}>
+                          <div className="w-full h-full animate-draw-card" style={{ animationFillMode: 'backwards', animationDelay: `${Math.max(0, idx - (total - lastDrawAmount)) * 0.08}s` }}>
                              {isPolluting && (
                                  <div className="absolute -inset-4 bg-fuchsia-900/40 z-[100] animate-glitch border border-fuchsia-500 pointer-events-none rounded-lg flex items-center justify-center backdrop-blur-[1px]">
                                      <LucideBrain size={40} className="text-fuchsia-300 animate-ping"/>

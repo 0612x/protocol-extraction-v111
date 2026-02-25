@@ -3,34 +3,51 @@ import { GridItem } from '../types';
 import { EQUIPMENT_ROW_COUNT } from '../constants';
 
 export const rotateMatrix = (matrix: number[][]): number[][] => {
+  if (!matrix || matrix.length === 0) return [];
   const rows = matrix.length;
-  const cols = matrix[0].length;
+  const cols = Math.max(0, ...matrix.map(row => row?.length || 0));
+  if (cols === 0) return matrix.map(() => []); // Return empty rows of correct height
+  
   const newMatrix: number[][] = Array.from({ length: cols }, () => Array(rows).fill(0));
 
   for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      newMatrix[c][rows - 1 - r] = matrix[r][c];
+    for (let c = 0; c < (matrix[r]?.length || 0); c++) {
+      if (matrix[r][c] === 1) {
+        newMatrix[c][rows - 1 - r] = 1;
+      }
     }
   }
   return newMatrix;
+};
+
+export const getRotatedShape = (item: GridItem): number[][] => {
+  let shape = item.originalShape || item.shape;
+  if (!shape || shape.length === 0) return [];
+
+  // Create a deep copy to prevent mutation
+  let currentShape = shape.map(row => [...(row || [])]);
+
+  for (let i = 0; i < (item.rotation || 0) / 90; i++) {
+    currentShape = rotateMatrix(currentShape);
+  }
+  return currentShape;
 };
 
 export const canPlaceItem = (
   grid: (string | null)[][],
   item: GridItem,
   gridX: number,
-  gridY: number,
-  rotation: number = 0
+  gridY: number
 ): boolean => {
-  let shape = item.shape;
-  for (let i = 0; i < rotation / 90; i++) {
-    shape = rotateMatrix(shape);
-  }
+  const shape = getRotatedShape(item);
+  if (shape.length === 0) return false;
 
   const rows = shape.length;
-  const cols = shape[0].length;
+  const cols = shape[0]?.length || 0;
+  
+  if (!grid || grid.length === 0) return false;
   const gridHeight = grid.length;
-  const gridWidth = grid[0].length;
+  const gridWidth = grid[0]?.length || 0;
 
   // Zone Boundary Check
   // Only enforce Zone Logic (Equipment vs Backpack) for the Player Grid (height > 4).
@@ -40,7 +57,7 @@ export const canPlaceItem = (
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      if (shape[r][c] === 1) {
+      if (shape[r]?.[c] === 1) {
         const targetX = gridX + c;
         const targetY = gridY + r;
 
@@ -75,16 +92,18 @@ export const placeItemInGrid = (
   x: number,
   y: number
 ): (string | null)[][] => {
+  if (!grid) return [];
   const newGrid = grid.map(row => [...row]);
-  let shape = item.shape;
-  for (let i = 0; i < item.rotation / 90; i++) {
-    shape = rotateMatrix(shape);
-  }
+  
+  const shape = getRotatedShape(item);
+  if (shape.length === 0) return newGrid;
 
   for (let r = 0; r < shape.length; r++) {
-    for (let c = 0; c < shape[0].length; c++) {
-      if (shape[r][c] === 1) {
-        newGrid[y + r][x + c] = item.id;
+    for (let c = 0; c < (shape[r]?.length || 0); c++) {
+      if (shape[r]?.[c] === 1) {
+        if (newGrid[y + r] && newGrid[y + r][x + c] !== undefined) {
+            newGrid[y + r][x + c] = item.id;
+        }
       }
     }
   }
@@ -117,26 +136,26 @@ export const findSmartArrangement = (
 ): GridItem[] | null => {
     // 1. Identify items colliding with the dragged item at the target position
     const draggedMask = new Set<string>();
-    const draggedShape = fixedItem.shape; 
+    const draggedShape = getRotatedShape(fixedItem); 
     
     const collidingIds = new Set<string>();
     
     const getItemAt = (x: number, y: number, items: GridItem[]) => {
         return items.find(i => {
              if (i.id === fixedItem.id) return false;
-             // Check if item i covers (x,y)
+             const shape = getRotatedShape(i);
              const localX = x - i.x;
              const localY = y - i.y;
-             if (localX >= 0 && localY >= 0 && localY < i.shape.length && localX < i.shape[0].length) {
-                 return i.shape[localY][localX] === 1;
+             if (localX >= 0 && localY >= 0 && localY < shape.length && localX < (shape[localY]?.length || 0)) {
+                 return shape[localY]?.[localX] === 1;
              }
              return false;
         });
     };
 
     for (let r = 0; r < draggedShape.length; r++) {
-        for (let c = 0; c < draggedShape[0].length; c++) {
-            if (draggedShape[r][c] === 1) {
+        for (let c = 0; c < (draggedShape[0]?.length || 0); c++) {
+            if (draggedShape[r] && draggedShape[r][c] === 1) {
                 const tx = fixedX + c;
                 const ty = fixedY + r;
                 
@@ -181,7 +200,7 @@ export const findSmartArrangement = (
     const newPositions: GridItem[] = [];
 
     // Heuristic: Sort items to move by size (largest first usually harder to place)
-    itemsToMove.sort((a, b) => (b.shape.length * b.shape[0].length) - (a.shape.length * a.shape[0].length));
+    itemsToMove.sort((a, b) => (b.shape.length * (b.shape[0]?.length || 0)) - (a.shape.length * (a.shape[0]?.length || 0)));
 
     for (const item of itemsToMove) {
         let placed = false;
