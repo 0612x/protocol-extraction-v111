@@ -450,7 +450,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
   // --- DRAG & DROP LOGIC ---
 
-  const handlePointerDown = (e: React.PointerEvent, item: GridItem, sourceGrid: 'PLAYER' | 'LOOT') => {
+  const handlePointerDown = (e: React.PointerEvent, item: GridItem, sourceGrid: 'PLAYER' | 'LOOT', cellX: number, cellY: number) => {
       // Allow scrolling for unidentified items (don't prevent default)
       if (item.isIdentified) {
           e.preventDefault();
@@ -460,8 +460,12 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       if (searchingItemId !== null) return; // Busy
 
       const rect = e.currentTarget.getBoundingClientRect();
-      const offsetX = e.clientX - rect.left;
-      const offsetY = e.clientY - rect.top;
+      const stride = CELL_SIZE + CELL_GAP;
+      // Core Fix: Calculate exact finger offset relative to the item's global top-left corner
+      const deltaX = (cellX - item.x) * stride;
+      const deltaY = (cellY - item.y) * stride;
+      const offsetX = e.clientX - rect.left + deltaX;
+      const offsetY = e.clientY - rect.top + deltaY;
 
       setDragState({
           item,
@@ -544,15 +548,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                        tempItems = gridItems.filter(i => i.id !== dragState.item.id);
                    }
                    
-                   const tempGrid = rebuildGrid(tempItems, gW, gH);
+                 const tempGrid = rebuildGrid(tempItems, gW, gH);
                    const itemForCheck = dragState.item;
+                   const targetUnlocked = targetGridType === 'LOOT' ? externalInventory?.unlockedRows : undefined;
                    
-                   const isLockedCollision = targetGridType === 'LOOT' && externalInventory?.unlockedRows !== undefined && (cellY + (itemForCheck.shape.length || 1) - 1) >= externalInventory.unlockedRows;
-
-                   if (isLockedCollision || !canPlaceItem(tempGrid, itemForCheck, cellX, cellY)) {
-                        if (isLockedCollision) return; // Prevent smart arrange in locked zone
+                   if (!canPlaceItem(tempGrid, itemForCheck, cellX, cellY, targetUnlocked)) {
                         // Collision detected! Try Smart Arrange
-                        const rearrangement = findSmartArrangement(tempItems, itemForCheck, cellX, cellY, gW, gH);
+                        const rearrangement = findSmartArrangement(tempItems, itemForCheck, cellX, cellY, gW, gH, targetUnlocked);
                         
                         if (rearrangement) {
                             setSmartPreview({
@@ -664,11 +666,10 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
           // 3. Check Placement OR Smart Arrange
           const itemForCheck = state.item;
-
-          const isLockedCollision = targetGridType === 'LOOT' && externalInventory?.unlockedRows !== undefined && (cellY + (itemForCheck.shape.length || 1) - 1) >= externalInventory.unlockedRows;
+          const targetUnlocked = targetGridType === 'LOOT' ? externalInventory?.unlockedRows : undefined;
 
           // Standard Place
-          if (!isLockedCollision && canPlaceItem(tempTargetGrid, itemForCheck, cellX, cellY)) {
+          if (canPlaceItem(tempTargetGrid, itemForCheck, cellX, cellY, targetUnlocked)) {
                moveItem(state.item, state.sourceGrid, targetGridType, cellX, cellY);
                return;
           }
@@ -864,12 +865,13 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
     let foundX = -1;
     let foundY = -1;
+    const targetUnlocked = !isPlayerInventory ? externalInventory?.unlockedRows : undefined;
 
     for (const [dx, dy] of offsets) {
         const testX = selectedItem.x + dx;
         const testY = selectedItem.y + dy;
         
-        if (canPlaceItem(tempGrid, tempItem, testX, testY)) {
+        if (canPlaceItem(tempGrid, tempItem, testX, testY, targetUnlocked)) {
             foundX = testX;
             foundY = testY;
             break;
@@ -1050,7 +1052,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                            let tempGrid = gridData;
                            if (dragState.sourceGrid === gridType) tempGrid = removeItemFromGrid(gridData, dragState.item.id);
                            const itemForCheck = { ...dragState.item, rotation: 0 as const };
-                           isGhostValid = canPlaceItem(tempGrid, itemForCheck, cellX, cellY, 0);
+                           const targetUnlocked = gridType === 'LOOT' ? externalInventory?.unlockedRows : undefined;
+                           isGhostValid = canPlaceItem(tempGrid, itemForCheck, cellX, cellY, targetUnlocked);
 
                            // Consumable Stack Check
                            if (!isGhostValid && dragState.item.type === 'CONSUMABLE') {
@@ -1096,7 +1099,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     ...borderStyle,
                     borderColor: !item.isIdentified ? 'rgba(87, 83, 78, 0.6)' : undefined 
                 }}
-                onPointerDown={(e) => handlePointerDown(e, item, gridType)}
+                onPointerDown={(e) => handlePointerDown(e, item, gridType, x, y)}
               >
                   {!item.isIdentified && (
                        <div className="w-full h-full relative flex items-center justify-center">

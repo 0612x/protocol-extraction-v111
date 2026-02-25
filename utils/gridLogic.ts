@@ -37,7 +37,8 @@ export const canPlaceItem = (
   grid: (string | null)[][],
   item: GridItem,
   gridX: number,
-  gridY: number
+  gridY: number,
+  unlockedRows?: number
 ): boolean => {
   const shape = getRotatedShape(item);
   if (shape.length === 0) return false;
@@ -62,6 +63,9 @@ export const canPlaceItem = (
 
         // 1. Out of bounds check
         if (targetX < 0 || targetX >= gridWidth || targetY < 0 || targetY >= gridHeight) {
+          return false;
+        }
+        if (unlockedRows !== undefined && targetY >= unlockedRows) {
           return false;
         }
 
@@ -131,7 +135,8 @@ export const findSmartArrangement = (
     fixedX: number,
     fixedY: number,
     gridWidth: number,
-    gridHeight: number
+    gridHeight: number,
+    unlockedRows?: number
 ): GridItem[] | null => {
     // 1. Identify items colliding with the dragged item at the target position
     const draggedMask = new Set<string>();
@@ -160,6 +165,7 @@ export const findSmartArrangement = (
                 
                 // Bounds Check for Dragged Item
                 if (tx < 0 || tx >= gridWidth || ty < 0 || ty >= gridHeight) return null; // Impossible
+                if (unlockedRows !== undefined && ty >= unlockedRows) return null; // Locked zone
                 
                 // Zone Logic Check
                 const isWarehouse = gridHeight >= 14;
@@ -233,7 +239,7 @@ export const findSmartArrangement = (
                      originalShape: item.originalShape || item.shape
                  };
                  
-                 if (canPlaceItem(tempGrid, testItem, pos.x, pos.y)) {
+                 if (canPlaceItem(tempGrid, testItem, pos.x, pos.y, unlockedRows)) {
                      tempGrid = placeItemInGrid(tempGrid, testItem, pos.x, pos.y);
                      newPositions.push(testItem);
                      placed = true;
