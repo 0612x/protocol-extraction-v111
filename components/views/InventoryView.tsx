@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { GridItem, InventoryState, MetaState } from '../../types';
 import { INVENTORY_WIDTH, INVENTORY_HEIGHT, SAFE_ZONE_WIDTH, LOOT_TABLE, EQUIPMENT_ROW_COUNT } from '../../constants';
-import { canPlaceItem, placeItemInGrid, removeItemFromGrid, rotateMatrix, createEmptyGrid, findSmartArrangement } from '../../utils/gridLogic';
+import { canPlaceItem, placeItemInGrid, removeItemFromGrid, rotateMatrix, createEmptyGrid, findSmartArrangement, getPlayerZone, isPlayerCellUnlocked } from '../../utils/gridLogic';
 import { LucideRotateCw, LucideTrash2, LucideBox, LucideSearch, LucideCheckCircle, LucideLoader2, LucideArchive, LucideShieldCheck, LucideLock, LucideInfo, LucideZap, LucideX, LucideScanLine, LucideGrab, LucideCoins, LucideEye, LucidePlus } from 'lucide-react';
 
 interface InventoryViewProps {
@@ -43,22 +43,9 @@ const STAT_LABELS: Record<string, string> = {
     'heal': '治疗'
 };
 
-// 核心系统：基于等级判定玩家网格 (8x5) 对应格子的解锁状态
-const isPlayerCellUnlocked = (x: number, y: number, level: number = 1) => {
-    // 安全区 Zone: (左下 3x3) -> x: 0..2, y: 2..4
-    if (x < 3 && y >= 2) return level === 1 ? (x <= 1 && y === 4) : level === 2 ? (x <= 1 && y >= 3) : true;
-    // 装备区 Zone: (右上 5x2) -> x: 3..7, y: 0..1
-    if (x >= 3 && y < 2) return level === 1 ? x <= 5 : level === 2 ? x <= 6 : true;
-    // 背包区 Zone 1: (左上 3x2) -> 始终全解锁
-    if (x < 3 && y < 2) return true; 
-    // 背包区 Zone 2: (右下 5x3) -> x: 3..7, y: 2..4
-    if (x >= 3 && y >= 2) return level === 1 ? (x <= 5 && y === 2) : level === 2 ? (x <= 5 && y <= 4) : true;
-    return false;
-};
-
 // Helper to determine borders for unified shape look (Robust Version)
 const getSmartBorders = (shape: number[][], r: number, c: number) => {
-    if (!shape || shape.length === 0 || !shape[r]) return {}; 
+    if (!shape || shape.length === 0 || !shape[r]) return {};
 
     const h = shape.length;
     const w = shape[0]?.length || 0;
@@ -178,6 +165,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const paginationRef = useRef({ page: 0, total: 1 });
   useEffect(() => { paginationRef.current = { page: warehousePage, total: totalPages }; }, [warehousePage, totalPages]);
   const edgeScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  const [hoveringEdge, setHoveringEdge] = useState<'LEFT' | 'RIGHT' | null>(null);
+  const hoveringEdgeRef = useRef<'LEFT' | 'RIGHT' | null>(null);
 
   const checkPlayerLock = (gridType: 'PLAYER' | 'LOOT', item: GridItem, cellX: number, cellY: number) => {
       if (gridType !== 'PLAYER') return true;
@@ -583,20 +573,34 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               const lootRect = lootGridRef.current?.getBoundingClientRect();
 
               // EDGE HOVER PAGINATION
+              let newHoverEdge: 'LEFT' | 'RIGHT' | null = null;
               if (lootRect && isPaginated) {
-                  const margin = 50; // 悬停触发区宽度 50px
+                  const margin = 50; 
                   const isNearLeft = e.clientX >= lootRect.left && e.clientX <= lootRect.left + margin && e.clientY >= lootRect.top && e.clientY <= lootRect.bottom;
                   const isNearRight = e.clientX <= lootRect.right && e.clientX >= lootRect.right - margin && e.clientY >= lootRect.top && e.clientY <= lootRect.bottom;
                   
                   const { page, total } = paginationRef.current;
+                  if (isNearLeft && page > 0) newHoverEdge = 'LEFT';
+                  else if (isNearRight && page < total - 1) newHoverEdge = 'RIGHT';
+              }
+
+              if (newHoverEdge !== hoveringEdgeRef.current) {
+                  hoveringEdgeRef.current = newHoverEdge;
+                  setHoveringEdge(newHoverEdge);
                   
-                  if (isNearLeft && page > 0) {
-                      if (!edgeScrollTimer.current) edgeScrollTimer.current = setTimeout(() => setWarehousePage(p => Math.max(0, p - 1)), 500);
-                  } else if (isNearRight && page < total - 1) {
-                      if (!edgeScrollTimer.current) edgeScrollTimer.current = setTimeout(() => setWarehousePage(p => Math.min(total - 1, p + 1)), 500);
-                  } else if (edgeScrollTimer.current) {
+                  if (edgeScrollTimer.current) {
                       clearTimeout(edgeScrollTimer.current);
                       edgeScrollTimer.current = null;
+                  }
+                  
+                  if (newHoverEdge === 'LEFT') {
+                      edgeScrollTimer.current = setTimeout(() => {
+                          setWarehousePage(p => Math.max(0, p - 1));
+                      }, 600);
+                  } else if (newHoverEdge === 'RIGHT') {
+                      edgeScrollTimer.current = setTimeout(() => {
+                          setWarehousePage(p => Math.min(paginationRef.current.total - 1, p + 1));
+                      }, 600);
                   }
               }
 
@@ -678,6 +682,10 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               clearTimeout(edgeScrollTimer.current);
               edgeScrollTimer.current = null;
           }
+          if (hoveringEdgeRef.current) {
+              hoveringEdgeRef.current = null;
+              setHoveringEdge(null);
+          }
           if (!dragState) return;
 
           if (!dragState.isDragging) {
@@ -699,6 +707,10 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           if (edgeScrollTimer.current) {
               clearTimeout(edgeScrollTimer.current);
               edgeScrollTimer.current = null;
+          }
+          if (hoveringEdgeRef.current) {
+              hoveringEdgeRef.current = null;
+              setHoveringEdge(null);
           }
           setDragState(null);
           setSmartPreview(null);
@@ -1119,9 +1131,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                        (gridType === 'PLAYER' && !isPlayerCellUnlocked(x, y, playerLevel));
 
       // NEW ZONES LOGIC based on 8x5 grid
-      const isSafeZone = gridType === 'PLAYER' && x < 3 && y >= 2;
-      const isEquipmentZone = gridType === 'PLAYER' && x >= 3 && y < 2;
-      const isBottomRowOfEquipment = isEquipmentZone && y === 1;
+      const isSafeZone = gridType === 'PLAYER' && getPlayerZone(x, y) === 'SAFE';
+      const isEquipmentZone = gridType === 'PLAYER' && getPlayerZone(x, y) === 'EQUIP';
+      const isBottomRowOfEquipment = isEquipmentZone && y === 1; // Used for UI border separation
 
       // Drag Ghost (Where the user's cursor is trying to place)
       let isGhost = false;
@@ -1326,7 +1338,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 ${isBottomRowOfEquipment ? 'border-b-4 border-b-black mb-1' : ''}
              `}
           >
-              {isSafeZone && !item && x===0 && y===2 && <LucideShieldCheck size={16} className="absolute top-1 left-1 text-dungeon-gold/20" />}
+              {isSafeZone && !item && x===0 && y===0 && <LucideShieldCheck size={16} className="absolute top-1 left-1 text-dungeon-gold/20" />}
               {isLocked && !item && <div className="absolute inset-0 flex items-center justify-center opacity-20"><LucideLock size={12} className="text-red-500"/></div>}
               {content}
               {ghostContent}
@@ -1409,13 +1421,27 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                                 {isPaginated && dragState && dragState.isDragging && (
                                     <>
                                         {warehousePage > 0 && (
-                                            <div className="absolute left-0 top-0 bottom-0 w-[40px] bg-gradient-to-r from-dungeon-gold/10 to-transparent z-40 pointer-events-none flex items-center justify-start pl-2">
-                                                <span className="text-dungeon-gold animate-pulse text-xl font-bold">&lt;</span>
+                                            <div className={`absolute left-0 top-0 bottom-0 w-[50px] transition-all duration-300 z-50 pointer-events-none flex flex-col items-center justify-center gap-2 ${hoveringEdge === 'LEFT' ? 'bg-dungeon-gold/30 border-r-2 border-dungeon-gold shadow-[10px_0_20px_rgba(202,138,4,0.3)]' : 'bg-gradient-to-r from-stone-500/10 to-transparent'}`}>
+                                                {hoveringEdge === 'LEFT' ? (
+                                                    <>
+                                                        <LucideLoader2 className="animate-spin text-dungeon-gold" size={24} />
+                                                        <span className="text-[10px] text-dungeon-gold font-bold tracking-widest" style={{ writingMode: 'vertical-rl' }}>翻页中</span>
+                                                    </>
+                                                ) : (
+                                                    <span className="text-stone-500 font-bold text-xl">&lt;</span>
+                                                )}
                                             </div>
                                         )}
                                         {warehousePage < totalPages - 1 && (
-                                            <div className="absolute right-0 top-0 bottom-0 w-[40px] bg-gradient-to-l from-dungeon-gold/10 to-transparent z-40 pointer-events-none flex items-center justify-end pr-2">
-                                                <span className="text-dungeon-gold animate-pulse text-xl font-bold">&gt;</span>
+                                            <div className={`absolute right-0 top-0 bottom-0 w-[50px] transition-all duration-300 z-50 pointer-events-none flex flex-col items-center justify-center gap-2 ${hoveringEdge === 'RIGHT' ? 'bg-dungeon-gold/30 border-l-2 border-dungeon-gold shadow-[-10px_0_20px_rgba(202,138,4,0.3)]' : 'bg-gradient-to-l from-stone-500/10 to-transparent'}`}>
+                                                {hoveringEdge === 'RIGHT' ? (
+                                                    <>
+                                                        <LucideLoader2 className="animate-spin text-dungeon-gold" size={24} />
+                                                        <span className="text-[10px] text-dungeon-gold font-bold tracking-widest" style={{ writingMode: 'vertical-rl' }}>翻页中</span>
+                                                    </>
+                                                ) : (
+                                                    <span className="text-stone-500 font-bold text-xl">&gt;</span>
+                                                )}
                                             </div>
                                         )}
                                     </>
@@ -1531,11 +1557,14 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     style={{ gridTemplateColumns: `repeat(${inventory.width}, 36px)` }}
                 >
                     {/* Markers */}
-                    <div className="absolute top-0 right-0 w-[calc((2.25rem+4px)*5)] h-[calc((2.25rem+4px)*2)] flex items-start justify-end p-1 pointer-events-none z-0">
-                        <span className="text-[8px] text-stone-600 uppercase">装备区</span>
+                    <div className="absolute top-0 left-0 w-[calc((2.25rem+4px)*3-4px)] h-[calc((2.25rem+4px)*3-4px)] border-r border-b border-dungeon-gold/20 pointer-events-none z-0 flex items-start justify-start p-1">
+                        <span className="text-[8px] font-bold text-dungeon-gold/40 uppercase">安全区 (SAFE)</span>
                     </div>
-                    <div className="absolute bottom-0 right-0 h-[calc((2.25rem+4px)*3)] flex items-end justify-end p-1 pointer-events-none z-0">
-                        <span className="text-[8px] text-stone-800 uppercase writing-mode-vertical">背包区</span>
+                    <div className="absolute top-0 right-0 w-[calc((2.25rem+4px)*5-4px)] h-[calc((2.25rem+4px)*2-4px)] border-b border-l border-stone-800 pointer-events-none z-0 flex items-start justify-end p-1">
+                        <span className="text-[8px] text-stone-500 uppercase">装备 (EQUIP)</span>
+                    </div>
+                    <div className="absolute bottom-0 right-0 w-[calc((2.25rem+4px)*5-4px)] h-[calc((2.25rem+4px)*3-4px)] pointer-events-none z-0 flex items-end justify-end p-1">
+                        <span className="text-[8px] text-stone-700 uppercase" style={{ writingMode: 'vertical-rl' }}>行囊 (BAG)</span>
                     </div>
                     
                     {Array.from({length: inventory.height}).map((_, y) =>

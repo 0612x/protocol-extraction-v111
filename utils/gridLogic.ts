@@ -52,8 +52,8 @@ export const canPlaceItem = (
 
   // Zone Boundary Check
   const isWarehouse = gridHeight >= 14;
-  const isPlayerInventory = !isWarehouse && gridHeight > 4;
-  const startZone = gridY < EQUIPMENT_ROW_COUNT ? 'EQUIPMENT' : 'BACKPACK';
+  const isPlayerInventory = !isWarehouse && gridHeight === 5;
+  const startZone = isPlayerInventory ? getPlayerZone(gridX, gridY) : null;
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -61,7 +61,7 @@ export const canPlaceItem = (
         const targetX = gridX + c;
         const targetY = gridY + r;
 
-        // 1. 边界与解锁区域检查 (修正: 确保 targetY 严格遵守传入的解锁行限制)
+        // 1. 边界与解锁区域检查
         if (targetX < 0 || targetX >= gridWidth || targetY < 0 || targetY >= gridHeight) {
           return false;
         }
@@ -69,11 +69,11 @@ export const canPlaceItem = (
           return false;
         }
 
-        // 2. Zone Crossing Check (Player Inventory Only)
+        // 2. Strict Zone Crossing Check (Player Inventory Only)
         if (isPlayerInventory) {
-            const currentCellZone = targetY < EQUIPMENT_ROW_COUNT ? 'EQUIPMENT' : 'BACKPACK';
+            const currentCellZone = getPlayerZone(targetX, targetY);
             if (currentCellZone !== startZone) {
-                return false; // Item is trying to cross the border
+                return false; // 禁止物品跨越安全区、装备区或背包区的边界
             }
         }
 
@@ -118,6 +118,32 @@ export const createEmptyGrid = (w: number, h: number) =>
 
 export const removeItemFromGrid = (grid: (string | null)[][], itemId: string) => {
   return grid.map(row => row.map(cell => (cell === itemId ? null : cell)));
+};
+
+export const getPlayerZone = (x: number, y: number): 'SAFE' | 'EQUIP' | 'BACKPACK' => {
+    if (x < 3 && y < 3) return 'SAFE';     // 左上 3x3
+    if (x >= 3 && y < 2) return 'EQUIP';   // 右上 5x2
+    return 'BACKPACK';                     // 剩下的所有格子
+};
+
+export const isPlayerCellUnlocked = (x: number, y: number, level: number = 1) => {
+    const zone = getPlayerZone(x, y);
+    if (zone === 'SAFE') {
+        if (level === 1) return x < 2 && y < 1; // 1级安全区 2x1 (左上角)
+        if (level === 2) return x < 2 && y < 2; // 2级安全区 2x2
+        return true; // 3级最大化 3x3
+    }
+    if (zone === 'EQUIP') {
+        if (level === 1) return x >= 3 && x < 6 && y < 2; // 1级装备区 3x2
+        if (level === 2) return x >= 3 && x < 7 && y < 2; // 2级装备区 4x2
+        return true; // 3级最大化 5x2
+    }
+    if (zone === 'BACKPACK') {
+        if (level === 1) return x >= 3 && x < 6 && y >= 2 && y < 5; // 1级背包区 (装备区正下方的 3x3)
+        if (level === 2) return x >= 3 && x < 8 && y >= 2 && y < 5; // 2级背包区 5x3
+        return true; // 3级最大化包含剩余边角
+    }
+    return false;
 };
 
 // --- SMART AUTO-ARRANGE LOGIC ---
@@ -169,10 +195,10 @@ export const findSmartArrangement = (
                 
                 // Zone Logic Check
                 const isWarehouse = gridHeight >= 14;
-                const isPlayerInventory = !isWarehouse && gridHeight > 4;
-                const fixedStartZone = fixedY < EQUIPMENT_ROW_COUNT ? 'EQUIPMENT' : 'BACKPACK';
+                const isPlayerInventory = !isWarehouse && gridHeight === 5;
+                const fixedStartZone = isPlayerInventory ? getPlayerZone(fixedX, fixedY) : null;
                 if (isPlayerInventory) {
-                    const currentCellZone = ty < EQUIPMENT_ROW_COUNT ? 'EQUIPMENT' : 'BACKPACK';
+                    const currentCellZone = getPlayerZone(tx, ty);
                     if (currentCellZone !== fixedStartZone) return null; // Cannot cross zone
                 }
 
