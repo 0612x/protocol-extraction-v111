@@ -1381,8 +1381,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             className="fixed pointer-events-none z-[100] opacity-80"
             style={{ 
                 left: dragState.currentX, 
-                // Offset Ghost UP by 60px so finger doesn't hide it
-                top: dragState.currentY - 60,
+                top: dragState.currentY, // 彻底移除偏移，实现指哪打哪，修复边缘判定
                 transform: `translate(-${dragState.grabOffsetX}px, -${dragState.grabOffsetY}px)`
             }}
           >
