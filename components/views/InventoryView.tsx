@@ -146,6 +146,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   // Search/Identify State
   const [searchingItemId, setSearchingItemId] = useState<string | null>(null);
   const [justRevealedId, setJustRevealedId] = useState<string | null>(null); // For feedback animation
+  const [rotateError, setRotateError] = useState(false); // For rotation failure feedback
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // PAGINATION LOGIC (Warehouse Box Mode)
@@ -905,8 +906,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       setSelectedItem(null);
   };
 
+ 
   const moveItem = (item: GridItem, source: 'PLAYER' | 'LOOT', target: 'PLAYER' | 'LOOT', x: number, y: number) => {
-      const newItem = { ...item, x, y }; // 修复：保持物品旋转状态，不要在每次移动时将其强制清零！
+      const newItem = { ...item, x, y }; // 彻底保留其当前的所有状态（包括真实的 rotation 和 shape）
       
       // Update Source List
       if (source === 'PLAYER') {
@@ -929,8 +931,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                  const without = prev.items.filter(i => i.id !== item.id);
                  const gridWithout = removeItemFromGrid(prev.grid, item.id);
                  // Place
-                 const itemForPlacement = { ...newItem, rotation: 0 as const };
-                 const gridWith = placeItemInGrid(gridWithout, itemForPlacement, x, y);
+                 const gridWith = placeItemInGrid(gridWithout, newItem, x, y);
                  return { ...prev, items: [...without, newItem], grid: gridWith };
              });
           } else {
@@ -940,23 +941,20 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
              });
              setLootGrid(prev => {
                  const gridWithout = removeItemFromGrid(prev, item.id);
-                 const itemForPlacement = { ...newItem, rotation: 0 as const };
-                 return placeItemInGrid(gridWithout, itemForPlacement, x, y);
+                 return placeItemInGrid(gridWithout, newItem, x, y);
              });
           }
       } else {
           // Cross Grid Move
           if (target === 'PLAYER') {
               setInventory(prev => {
-                  const itemForPlacement = { ...newItem, rotation: 0 as const };
-                  const gridWith = placeItemInGrid(prev.grid, itemForPlacement, x, y);
+                  const gridWith = placeItemInGrid(prev.grid, newItem, x, y);
                   return { ...prev, items: [...prev.items, newItem], grid: gridWith };
               });
           } else {
                setLootItems(prev => [...prev, newItem]);
                setLootGrid(prev => {
-                   const itemForPlacement = { ...newItem, rotation: 0 as const };
-                   return placeItemInGrid(prev, itemForPlacement, x, y);
+                   return placeItemInGrid(prev, newItem, x, y);
                });
           }
       }
@@ -1012,6 +1010,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     }
 
     if (foundX !== -1) {
+        setRotateError(false);
         // Apply Rotation at found coordinates
         const updateItem = (i: GridItem) => i.id === selectedItem.id ? { ...i, rotation: nextRot, shape: newShape, x: foundX, y: foundY } : i;
         
@@ -1028,7 +1027,11 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                  return updatedItems;
              });
         }
-        setSelectedItem(prev => prev ? { ...prev, rotation: nextRot, shape: newShape, originalShape: newOriginalShape, x: foundX, y: foundY } : null);
+        // 核心修复：移除了导致程序崩溃的 newOriginalShape 变量
+        setSelectedItem(prev => prev ? { ...prev, rotation: nextRot, shape: newShape, x: foundX, y: foundY } : null);
+    } else {
+        setRotateError(true);
+        setTimeout(() => setRotateError(false), 2000);
     }
   };
 
@@ -1200,7 +1203,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                        } else {
                            let tempGrid = gridData;
                            if (dragState.sourceGrid === gridType) tempGrid = removeItemFromGrid(gridData, dragState.item.id);
-                           const itemForCheck = dragState.item; // 修复：必须传入物品的真实旋转状态！
+                           const itemForCheck = dragState.item; // 核心修复：绝对禁止将 rotation 归零
                            const targetUnlocked = gridType === 'LOOT' ? externalInventory?.unlockedRows : undefined;
                            isGhostValid = canPlaceItem(tempGrid, itemForCheck, cellX, cellY, targetUnlocked) && checkPlayerLock(gridType, itemForCheck, cellX, cellY);
 
@@ -1513,6 +1516,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                             </span>
                             <div className="flex items-center gap-2">
                                 <span className="text-[10px] text-stone-500 truncate">{selectedItem.isIdentified ? TYPE_LABELS[selectedItem.type] : '接触以鉴定'}</span>
+                                {rotateError && <span className="text-[10px] text-red-400 font-bold animate-pulse bg-red-900/40 px-1 rounded border border-red-800">空间不足，无法旋转</span>}
                                 {selectedItem.quantity && selectedItem.quantity > 1 && (
                                     <span className="text-[10px] text-stone-300 bg-stone-800 px-1 rounded">x{selectedItem.quantity}</span>
                                 )}
