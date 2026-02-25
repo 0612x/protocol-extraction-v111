@@ -614,9 +614,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                   targetGridType = 'PLAYER';
                   gridRect = playerRect;
                   gridItems = inventory.items;
-                  // 修正: 使用动态高度 inventory.height (支持仓库的14行)，不再写死 6
-                  gW = inventory.width; 
-                  gH = inventory.height;
+                  // 强制覆盖缓存数据中的旧高度，使用严格常量标准
+                  gW = INVENTORY_WIDTH; 
+                  gH = INVENTORY_HEIGHT;
               } else if (lootRect && e.clientX >= lootRect.left && e.clientX <= lootRect.right && e.clientY >= lootRect.top && e.clientY <= lootRect.bottom) {
                   targetGridType = 'LOOT';
                   gridRect = lootRect;
@@ -1133,7 +1133,6 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       // NEW ZONES LOGIC based on 8x5 grid
       const isSafeZone = gridType === 'PLAYER' && getPlayerZone(x, y) === 'SAFE';
       const isEquipmentZone = gridType === 'PLAYER' && getPlayerZone(x, y) === 'EQUIP';
-      const isBottomRowOfEquipment = isEquipmentZone && y === 1; // Used for UI border separation
 
       // Drag Ghost (Where the user's cursor is trying to place)
       let isGhost = false;
@@ -1333,9 +1332,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
              key={`${x}-${y}`} 
              className={`
                 w-9 h-9 border relative select-none
-                ${isTopLeft || isGhostTopLeft ? 'z-40' : 'z-0'} 
-                ${isLocked ? 'bg-red-950/20 border-red-900/30' : isSafeZone ? 'bg-dungeon-gold/5 border-dungeon-gold/20' : isEquipmentZone ? 'bg-[#1a1a1a] border-stone-800' : 'bg-stone-900/70 border-stone-700'}
-                ${isBottomRowOfEquipment ? 'border-b-4 border-b-black mb-1' : ''}
+                ${isTopLeft || isGhostTopLeft ? 'z-40' : 'z-10'} 
+                ${isLocked ? 'bg-[repeating-linear-gradient(45deg,rgba(153,27,27,0.2),rgba(153,27,27,0.2)_4px,rgba(0,0,0,0)_4px,rgba(0,0,0,0)_8px)] border-red-900/50 overflow-hidden' : isSafeZone ? 'bg-dungeon-gold/10 border-dungeon-gold/30' : isEquipmentZone ? 'bg-blue-900/20 border-blue-800/40' : 'bg-stone-800/60 border-stone-700'}
              `}
           >
               {isSafeZone && !item && x===0 && y===0 && <LucideShieldCheck size={16} className="absolute top-1 left-1 text-dungeon-gold/20" />}
@@ -1550,25 +1548,26 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 )}
             </div>
 
-            <div className="flex-1 overflow-y-auto w-full flex justify-center p-2 min-h-0 relative">
+            <div className="flex-1 overflow-hidden w-full flex justify-center items-center p-2 min-h-0 relative">
                 <div 
                     ref={playerGridRef}
-                    className="grid gap-1 bg-black p-2 border-2 border-stone-700 shadow-2xl relative m-auto mb-16"
-                    style={{ gridTemplateColumns: `repeat(${inventory.width}, 36px)` }}
+                    className="grid gap-1 bg-black p-2 border-2 border-stone-700 shadow-2xl relative m-auto"
+                    style={{ gridTemplateColumns: `repeat(${INVENTORY_WIDTH}, 36px)` }}
                 >
-                    {/* Markers */}
-                    <div className="absolute top-0 left-0 w-[calc((2.25rem+4px)*3-4px)] h-[calc((2.25rem+4px)*3-4px)] border-r border-b border-dungeon-gold/20 pointer-events-none z-0 flex items-start justify-start p-1">
-                        <span className="text-[8px] font-bold text-dungeon-gold/40 uppercase">安全区 (SAFE)</span>
+                    {/* Markers - 绝对精准像素对齐 (36px格子 + 4px间隙 + 8px内边距) */}
+                    <div className="absolute top-[8px] left-[8px] w-[116px] h-[116px] border-r-2 border-b-2 border-dungeon-gold/40 pointer-events-none z-20 flex items-start justify-start p-1 shadow-[4px_4px_10px_rgba(202,138,4,0.05)]">
+                        <span className="text-[10px] font-bold text-dungeon-gold/60 uppercase bg-black/50 px-1 rounded">安全区</span>
                     </div>
-                    <div className="absolute top-0 right-0 w-[calc((2.25rem+4px)*5-4px)] h-[calc((2.25rem+4px)*2-4px)] border-b border-l border-stone-800 pointer-events-none z-0 flex items-start justify-end p-1">
-                        <span className="text-[8px] text-stone-500 uppercase">装备 (EQUIP)</span>
+                    <div className="absolute top-[8px] right-[8px] w-[196px] h-[76px] border-b-2 border-l-2 border-blue-500/30 pointer-events-none z-20 flex items-start justify-end p-1 shadow-[-4px_4px_10px_rgba(59,130,246,0.05)]">
+                        <span className="text-[10px] font-bold text-blue-400/60 uppercase bg-black/50 px-1 rounded">装备区</span>
                     </div>
-                    <div className="absolute bottom-0 right-0 w-[calc((2.25rem+4px)*5-4px)] h-[calc((2.25rem+4px)*3-4px)] pointer-events-none z-0 flex items-end justify-end p-1">
-                        <span className="text-[8px] text-stone-700 uppercase" style={{ writingMode: 'vertical-rl' }}>行囊 (BAG)</span>
+                    <div className="absolute bottom-[8px] right-[8px] w-[196px] h-[116px] pointer-events-none z-20 flex items-end justify-end p-1">
+                        <span className="text-[10px] font-bold text-stone-500 uppercase bg-black/50 px-1 rounded">背包区</span>
                     </div>
                     
-                    {Array.from({length: inventory.height}).map((_, y) =>
-                        Array.from({length: inventory.width}).map((_, x) => renderCell(x, y, 'PLAYER', inventory.grid, inventory.items))
+                    {/* 强制使用 INVENTORY_HEIGHT 常量 (5行)，裁切掉由于旧存档遗留的第六行 */}
+                    {Array.from({length: INVENTORY_HEIGHT}).map((_, y) =>
+                        Array.from({length: INVENTORY_WIDTH}).map((_, x) => renderCell(x, y, 'PLAYER', inventory.grid, inventory.items))
                     )}
                 </div>
             </div>
