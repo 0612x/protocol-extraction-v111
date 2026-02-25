@@ -16,7 +16,7 @@ interface InventoryViewProps {
   maxStage: number;
   // New Props for Warehouse Mode
   externalInventory?: InventoryState;
-  setExternalInventory?: (inv: InventoryState) => void;
+  setExternalInventory?: React.Dispatch<React.SetStateAction<InventoryState>> | ((inv: any) => void);
   externalTitle?: string;
   setMetaState?: React.Dispatch<React.SetStateAction<MetaState>>;
 }
@@ -96,20 +96,26 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   // Derived State for "Loot" Grid (External)
   const lootGrid = externalInventory ? externalInventory.grid : localLootGrid;
   const lootItems = externalInventory ? externalInventory.items : localLootItems;
-  const setLootGrid = (grid: (string | null)[][]) => {
-      if (setExternalInventory && externalInventory) {
-          setExternalInventory({ ...externalInventory, grid });
+  
+  const setLootGrid = (gridUpdater: (string | null)[][] | ((prev: (string | null)[][]) => (string | null)[][])) => {
+      if (setExternalInventory) {
+          setExternalInventory(prev => ({ 
+              ...prev, 
+              grid: typeof gridUpdater === 'function' ? gridUpdater(prev.grid) : gridUpdater 
+          }));
       } else {
-          setLocalLootGrid(grid);
+          setLocalLootGrid(gridUpdater);
       }
   };
-  const setLootItems = (items: GridItem[] | ((prev: GridItem[]) => GridItem[])) => {
-      if (setExternalInventory && externalInventory) {
-          // Handle functional update if necessary, though we usually pass direct array
-          const newItems = typeof items === 'function' ? items(externalInventory.items) : items;
-          setExternalInventory({ ...externalInventory, items: newItems });
+  
+  const setLootItems = (itemsUpdater: GridItem[] | ((prev: GridItem[]) => GridItem[])) => {
+      if (setExternalInventory) {
+          setExternalInventory(prev => ({ 
+              ...prev, 
+              items: typeof itemsUpdater === 'function' ? itemsUpdater(prev.items) : itemsUpdater 
+          }));
       } else {
-          setLocalLootItems(items);
+          setLocalLootItems(itemsUpdater);
       }
   };
   

@@ -23,17 +23,23 @@ export const BaseCampView: React.FC<BaseCampViewProps> = ({ metaState, setMetaSt
   const selectedChar = metaState.roster.find(c => c.id === selectedCharId) || metaState.roster[0];
 
   // --- WAREHOUSE LOGIC ---
-  const handleWarehouseUpdate = (newWarehouse: InventoryState) => {
+  const handleWarehouseUpdate = (newWarehouse: InventoryState | ((prev: InventoryState) => InventoryState)) => {
       setMetaState(prev => ({
           ...prev,
-          warehouse: newWarehouse
+          warehouse: typeof newWarehouse === 'function' ? newWarehouse(prev.warehouse) : newWarehouse
       }));
   };
 
-  const handleCharacterInventoryUpdate = (newInventory: InventoryState) => {
+  const handleCharacterInventoryUpdate = (newInventory: InventoryState | ((prev: InventoryState) => InventoryState)) => {
       setMetaState(prev => ({
           ...prev,
-          roster: prev.roster.map(c => c.id === selectedChar.id ? { ...c, inventory: newInventory } : c)
+          roster: prev.roster.map(c => {
+              if (c.id === selectedChar.id) {
+                  const resolvedInventory = typeof newInventory === 'function' ? newInventory(c.inventory) : newInventory;
+                  return { ...c, inventory: resolvedInventory };
+              }
+              return c;
+          })
       }));
   };
 

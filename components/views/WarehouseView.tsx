@@ -15,19 +15,23 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({ metaState, setMeta
     return <div>No active character selected.</div>;
   }
 
-  const handleCharacterInventoryUpdate = (newInventory: InventoryState) => {
+  const handleCharacterInventoryUpdate = (newInventory: InventoryState | ((prev: InventoryState) => InventoryState)) => {
     setMetaState(prev => ({
       ...prev,
-      roster: prev.roster.map(c => 
-        c.id === activeCharacter.id ? { ...c, inventory: newInventory } : c
-      ),
+      roster: prev.roster.map(c => {
+        if (c.id === activeCharacter.id) {
+            const resolvedInventory = typeof newInventory === 'function' ? newInventory(c.inventory) : newInventory;
+            return { ...c, inventory: resolvedInventory };
+        }
+        return c;
+      }),
     }));
   };
 
-  const handleWarehouseInventoryUpdate = (newInventory: InventoryState) => {
+  const handleWarehouseInventoryUpdate = (newInventory: InventoryState | ((prev: InventoryState) => InventoryState)) => {
     setMetaState(prev => ({
       ...prev,
-      warehouse: newInventory,
+      warehouse: typeof newInventory === 'function' ? newInventory(prev.warehouse) : newInventory,
     }));
   };
 
