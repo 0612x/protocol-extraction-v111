@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { GridItem, InventoryState, MetaState } from '../../types';
 import { INVENTORY_WIDTH, INVENTORY_HEIGHT, SAFE_ZONE_WIDTH, LOOT_TABLE, EQUIPMENT_ROW_COUNT } from '../../constants';
-import { canPlaceItem, placeItemInGrid, removeItemFromGrid, rotateMatrix, createEmptyGrid, findSmartArrangement, getPlayerZone, isPlayerCellUnlocked } from '../../utils/gridLogic';
+import { canPlaceItem, placeItemInGrid, removeItemFromGrid, rotateMatrix, createEmptyGrid, findSmartArrangement, getPlayerZone, isPlayerCellUnlocked, getRotatedShape } from '../../utils/gridLogic';
 import { LucideRotateCw, LucideTrash2, LucideBox, LucideSearch, LucideCheckCircle, LucideLoader2, LucideArchive, LucideShieldCheck, LucideLock, LucideInfo, LucideZap, LucideX, LucideScanLine, LucideGrab, LucideCoins, LucideEye, LucidePlus } from 'lucide-react';
 
 interface InventoryViewProps {
