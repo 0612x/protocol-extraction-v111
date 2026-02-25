@@ -149,6 +149,7 @@ export interface InventoryState {
   items: GridItem[];
   width: number;
   height: number;
+  unlockedRows?: number;
 }
 
 export type Blueprint = {

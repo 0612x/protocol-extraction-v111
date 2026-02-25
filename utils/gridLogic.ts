@@ -50,9 +50,8 @@ export const canPlaceItem = (
   const gridWidth = grid[0]?.length || 0;
 
   // Zone Boundary Check
-  // Only enforce Zone Logic (Equipment vs Backpack) for the exactly 6-row Player Grid.
-  // Warehouse and Loot crates ignore this restriction.
-  const isPlayerInventory = gridHeight === 6;
+  const isWarehouse = gridHeight >= 14;
+  const isPlayerInventory = !isWarehouse && gridHeight > 4;
   const startZone = gridY < EQUIPMENT_ROW_COUNT ? 'EQUIPMENT' : 'BACKPACK';
 
   for (let r = 0; r < rows; r++) {
@@ -163,7 +162,8 @@ export const findSmartArrangement = (
                 if (tx < 0 || tx >= gridWidth || ty < 0 || ty >= gridHeight) return null; // Impossible
                 
                 // Zone Logic Check
-                const isPlayerInventory = gridHeight === 6;
+                const isWarehouse = gridHeight >= 14;
+                const isPlayerInventory = !isWarehouse && gridHeight > 4;
                 const fixedStartZone = fixedY < EQUIPMENT_ROW_COUNT ? 'EQUIPMENT' : 'BACKPACK';
                 if (isPlayerInventory) {
                     const currentCellZone = ty < EQUIPMENT_ROW_COUNT ? 'EQUIPMENT' : 'BACKPACK';

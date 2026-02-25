@@ -55,7 +55,8 @@ const INITIAL_META_STATE: MetaState = {
     grid: createEmptyGrid(WAREHOUSE_WIDTH, WAREHOUSE_HEIGHT),
     items: [],
     width: WAREHOUSE_WIDTH,
-    height: WAREHOUSE_HEIGHT
+    height: WAREHOUSE_HEIGHT,
+    unlockedRows: 6
   },
   roster: [
     {
@@ -86,6 +87,10 @@ export default function App() {
         initialState.warehouse.grid = newGrid;
         initialState.warehouse.width = WAREHOUSE_WIDTH;
         initialState.warehouse.height = WAREHOUSE_HEIGHT;
+    }
+
+    if (initialState.warehouse && initialState.warehouse.unlockedRows === undefined) {
+        initialState.warehouse.unlockedRows = 6;
     }
 
     // Data Migration: Ensure all items have originalShape

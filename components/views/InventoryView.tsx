@@ -547,7 +547,10 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                    const tempGrid = rebuildGrid(tempItems, gW, gH);
                    const itemForCheck = dragState.item;
                    
-                   if (!canPlaceItem(tempGrid, itemForCheck, cellX, cellY)) {
+                   const isLockedCollision = targetGridType === 'LOOT' && externalInventory?.unlockedRows !== undefined && (cellY + (itemForCheck.shape.length || 1) - 1) >= externalInventory.unlockedRows;
+
+                   if (isLockedCollision || !canPlaceItem(tempGrid, itemForCheck, cellX, cellY)) {
+                        if (isLockedCollision) return; // Prevent smart arrange in locked zone
                         // Collision detected! Try Smart Arrange
                         const rearrangement = findSmartArrangement(tempItems, itemForCheck, cellX, cellY, gW, gH);
                         
@@ -662,8 +665,10 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           // 3. Check Placement OR Smart Arrange
           const itemForCheck = state.item;
 
+          const isLockedCollision = targetGridType === 'LOOT' && externalInventory?.unlockedRows !== undefined && (cellY + (itemForCheck.shape.length || 1) - 1) >= externalInventory.unlockedRows;
+
           // Standard Place
-          if (canPlaceItem(tempTargetGrid, itemForCheck, cellX, cellY)) {
+          if (!isLockedCollision && canPlaceItem(tempTargetGrid, itemForCheck, cellX, cellY)) {
                moveItem(state.item, state.sourceGrid, targetGridType, cellX, cellY);
                return;
           }
@@ -989,6 +994,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       const isTopLeft = item && item.x === x && item.y === y;
       const isGhostTopLeft = ghostMovedItem && ghostMovedItem.x === x && ghostMovedItem.y === y;
 
+      const isLocked = gridType === 'LOOT' && externalInventory !== undefined && externalInventory.unlockedRows !== undefined && y >= externalInventory.unlockedRows;
+
       // SAFE ZONE in STORAGE AREA (Left Half of Backpack)
       const isSafeZone = gridType === 'PLAYER' && x < SAFE_ZONE_WIDTH && y >= EQUIPMENT_ROW_COUNT;
       const isEquipmentZone = gridType === 'PLAYER' && y < EQUIPMENT_ROW_COUNT;
@@ -1176,11 +1183,12 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
              className={`
                 w-9 h-9 border relative select-none
                 ${isTopLeft || isGhostTopLeft ? 'z-40' : 'z-0'} 
-                ${isSafeZone ? 'bg-dungeon-gold/5 border-dungeon-gold/20' : isEquipmentZone ? 'bg-[#1a1a1a] border-stone-800' : 'bg-stone-900/70 border-stone-700'}
+                ${isLocked ? 'bg-red-950/20 border-red-900/30' : isSafeZone ? 'bg-dungeon-gold/5 border-dungeon-gold/20' : isEquipmentZone ? 'bg-[#1a1a1a] border-stone-800' : 'bg-stone-900/70 border-stone-700'}
                 ${isBottomRowOfEquipment ? 'border-b-4 border-b-black mb-1' : ''}
              `}
           >
               {isSafeZone && !item && x===0 && y===EQUIPMENT_ROW_COUNT && <LucideShieldCheck size={16} className="absolute top-1 left-1 text-dungeon-gold/20" />}
+              {isLocked && !item && <div className="absolute inset-0 flex items-center justify-center opacity-20"><LucideLock size={12} className="text-red-500"/></div>}
               {content}
               {ghostContent}
               {isGhost && (
@@ -1256,6 +1264,24 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                                 {Array.from({length: externalInventory ? externalInventory.height : CONTAINER_HEIGHT}).map((_, y) => 
                                     Array.from({length: externalInventory ? externalInventory.width : CONTAINER_WIDTH}).map((_, x) => renderCell(x, y, 'LOOT', lootGrid, lootItems))
                                 )}
+                                
+                                {externalInventory && externalInventory.unlockedRows !== undefined && externalInventory.unlockedRows < externalInventory.height && (
+                                    <div 
+                                        className="absolute left-0 right-0 z-30 flex justify-center items-center pointer-events-none"
+                                        style={{ top: `${externalInventory.unlockedRows * 40}px`, height: '40px' }}
+                                    >
+                                        <button 
+                                            className="pointer-events-auto bg-black/80 hover:bg-dungeon-gold/20 border border-dungeon-gold text-dungeon-gold text-xs px-4 py-1 rounded backdrop-blur-sm shadow-lg flex items-center gap-2 transition-all"
+                                            onClick={() => {
+                                                if (setExternalInventory) {
+                                                    setExternalInventory(prev => ({...prev, unlockedRows: (prev.unlockedRows || 0) + 1}));
+                                                }
+                                            }}
+                                        >
+                                            <LucideLock size={12} /> 解锁扩容 (🪙 1000)
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -1264,7 +1290,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         )}
 
         {/* PLAYER SECTION */}
-        <div className={`w-full bg-dungeon-dark border-t-2 border-stone-800 z-30 shrink-0 flex flex-col shadow-[0_-10px_50px_rgba(0,0,0,0.8)] pb-12 pt-2 ${!isLootPhase && !externalInventory ? 'h-full justify-center' : 'h-auto'}`}>
+        <div className={`w-full bg-dungeon-dark border-t-2 border-stone-800 z-30 flex flex-col shadow-[0_-10px_50px_rgba(0,0,0,0.8)] pb-4 pt-2 ${!isLootPhase && !externalInventory ? 'h-full justify-center shrink-0' : 'flex-1 min-h-0 overflow-hidden'}`}>
             
             {/* Info / Action Bar */}
             <div className="min-h-[48px] px-4 py-2 bg-black/40 border-b border-stone-800 mb-2 flex items-center justify-between">
@@ -1313,29 +1339,28 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 )}
             </div>
 
-            <div className="flex justify-center p-2">
+            <div className="flex-1 overflow-y-auto w-full flex justify-center p-2 min-h-0 relative">
                 <div 
                     ref={playerGridRef}
-                    className="grid gap-1 bg-black p-2 border-2 border-stone-700 shadow-2xl relative"
-                    style={{ gridTemplateColumns: `repeat(${INVENTORY_WIDTH}, 36px)` }}
+                    className="grid gap-1 bg-black p-2 border-2 border-stone-700 shadow-2xl relative m-auto mb-16"
+                    style={{ gridTemplateColumns: `repeat(${inventory.width}, 36px)` }}
                 >
                     {/* Markers */}
-                    {/* Safe Zone Visual Indicator - Moved to Storage Area (Row 2, Col 0, 4 wide, 4 high) */}
                     <div 
                         className="absolute border-r border-b border-dungeon-gold/40 bg-dungeon-gold/5 pointer-events-none z-0"
                         style={{
-                            width: `calc((2.25rem + 4px) * ${SAFE_ZONE_WIDTH} - 4px)`, // Width calculation fixed (-4px for gap adjustment)
-                            height: `calc((2.25rem + 4px) * ${INVENTORY_HEIGHT - EQUIPMENT_ROW_COUNT} - 4px)`, // Height calculation fixed
-                            top: `calc(0.5rem + (2.25rem + 4px) * ${EQUIPMENT_ROW_COUNT})`, // adjusted for gap-1 (4px)
-                            left: '0.5rem' // p-2 is 0.5rem
+                            width: `calc((2.25rem + 4px) * ${SAFE_ZONE_WIDTH} - 4px)`,
+                            height: `calc((2.25rem + 4px) * ${inventory.height - EQUIPMENT_ROW_COUNT} - 4px)`, 
+                            top: `calc(0.5rem + (2.25rem + 4px) * ${EQUIPMENT_ROW_COUNT})`, 
+                            left: '0.5rem'
                         }}
                     ></div>
 
                     <div className="absolute top-0 right-0 h-[calc((2.25rem+4px)*2)] flex items-start justify-end p-1 pointer-events-none z-0"><span className="text-[8px] text-stone-600 uppercase writing-mode-vertical">装备</span></div>
                     <div className="absolute bottom-0 right-0 h-[calc((2.25rem+4px)*4)] flex items-end justify-end p-1 pointer-events-none z-0"><span className="text-[8px] text-stone-800 uppercase writing-mode-vertical">行囊</span></div>
                     
-                    {Array.from({length: INVENTORY_HEIGHT}).map((_, y) => 
-                        Array.from({length: INVENTORY_WIDTH}).map((_, x) => renderCell(x, y, 'PLAYER', inventory.grid, inventory.items))
+                    {Array.from({length: inventory.height}).map((_, y) => 
+                        Array.from({length: inventory.width}).map((_, x) => renderCell(x, y, 'PLAYER', inventory.grid, inventory.items))
                     )}
                 </div>
             </div>
