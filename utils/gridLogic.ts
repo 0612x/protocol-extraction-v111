@@ -50,10 +50,10 @@ export const canPlaceItem = (
   const gridHeight = grid.length;
   const gridWidth = grid[0]?.length || 0;
 
-  // Zone Boundary Check
+ // Zone Boundary Check
   const isWarehouse = gridHeight >= 14;
-  const isPlayerInventory = !isWarehouse && gridHeight === 5;
-  const startZone = isPlayerInventory ? getPlayerZone(gridX, gridY) : null;
+  const isPlayerInventory = !isWarehouse; // 核心修复：不依赖高度等于5，防止旧数据缓存导致判定失效
+  let firstBlockZone: 'SAFE' | 'EQUIP' | 'BACKPACK' | null = null;
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -72,8 +72,10 @@ export const canPlaceItem = (
         // 2. Strict Zone Crossing Check (Player Inventory Only)
         if (isPlayerInventory) {
             const currentCellZone = getPlayerZone(targetX, targetY);
-            if (currentCellZone !== startZone) {
-                return false; // 禁止物品跨越安全区、装备区或背包区的边界
+            if (!firstBlockZone) {
+                firstBlockZone = currentCellZone;
+            } else if (currentCellZone !== firstBlockZone) {
+                return false; // 禁止物品的任何实体部分跨区
             }
         }
 
@@ -169,6 +171,7 @@ export const findSmartArrangement = (
     const draggedShape = getRotatedShape(fixedItem); 
     
     const collidingIds = new Set<string>();
+    let fixedItemFirstZone: 'SAFE' | 'EQUIP' | 'BACKPACK' | null = null;
     
     const getItemAt = (x: number, y: number, items: GridItem[]) => {
         return items.find(i => {
@@ -195,11 +198,15 @@ export const findSmartArrangement = (
                 
                 // Zone Logic Check
                 const isWarehouse = gridHeight >= 14;
-                const isPlayerInventory = !isWarehouse && gridHeight === 5;
-                const fixedStartZone = isPlayerInventory ? getPlayerZone(fixedX, fixedY) : null;
+                const isPlayerInventory = !isWarehouse;
+                
                 if (isPlayerInventory) {
                     const currentCellZone = getPlayerZone(tx, ty);
-                    if (currentCellZone !== fixedStartZone) return null; // Cannot cross zone
+                    if (!fixedItemFirstZone) {
+                        fixedItemFirstZone = currentCellZone;
+                    } else if (currentCellZone !== fixedItemFirstZone) {
+                        return null; // Cannot cross zone
+                    }
                 }
 
                 // Identify Collision

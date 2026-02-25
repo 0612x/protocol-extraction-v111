@@ -575,9 +575,11 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               // EDGE HOVER PAGINATION
               let newHoverEdge: 'LEFT' | 'RIGHT' | null = null;
               if (lootRect && isPaginated) {
-                  const margin = 50; 
-                  const isNearLeft = e.clientX >= lootRect.left && e.clientX <= lootRect.left + margin && e.clientY >= lootRect.top && e.clientY <= lootRect.bottom;
-                  const isNearRight = e.clientX <= lootRect.right && e.clientX >= lootRect.right - margin && e.clientY >= lootRect.top && e.clientY <= lootRect.bottom;
+                  // 优化检测区域：向网格外部延伸 60px，内部收缩至 15px，完美防误触！
+                  const marginOut = 60; 
+                  const marginIn = 15;  
+                  const isNearLeft = e.clientX >= lootRect.left - marginOut && e.clientX <= lootRect.left + marginIn && e.clientY >= lootRect.top && e.clientY <= lootRect.bottom;
+                  const isNearRight = e.clientX <= lootRect.right + marginOut && e.clientX >= lootRect.right - marginIn && e.clientY >= lootRect.top && e.clientY <= lootRect.bottom;
                   
                   const { page, total } = paginationRef.current;
                   if (isNearLeft && page > 0) newHoverEdge = 'LEFT';
@@ -904,7 +906,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   };
 
   const moveItem = (item: GridItem, source: 'PLAYER' | 'LOOT', target: 'PLAYER' | 'LOOT', x: number, y: number) => {
-      const newItem = { ...item, x, y, rotation: 0, shape: item.originalShape, originalShape: item.originalShape };
+      const newItem = { ...item, x, y }; // 修复：保持物品旋转状态，不要在每次移动时将其强制清零！
       
       // Update Source List
       if (source === 'PLAYER') {
@@ -1198,7 +1200,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                        } else {
                            let tempGrid = gridData;
                            if (dragState.sourceGrid === gridType) tempGrid = removeItemFromGrid(gridData, dragState.item.id);
-                           const itemForCheck = { ...dragState.item, rotation: 0 as const };
+                           const itemForCheck = dragState.item; // 修复：必须传入物品的真实旋转状态！
                            const targetUnlocked = gridType === 'LOOT' ? externalInventory?.unlockedRows : undefined;
                            isGhostValid = canPlaceItem(tempGrid, itemForCheck, cellX, cellY, targetUnlocked) && checkPlayerLock(gridType, itemForCheck, cellX, cellY);
 
