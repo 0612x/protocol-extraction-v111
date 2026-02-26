@@ -20,6 +20,7 @@ interface InventoryViewProps {
   externalTitle?: string;
   setMetaState?: React.Dispatch<React.SetStateAction<MetaState>>;
   playerLevel?: number; // 角色素体等级
+  customPlayerHeader?: React.ReactNode; // 新增：用于在背包正上方渲染素体选择器
 }
 
 const CONTAINER_WIDTH = 8;
@@ -87,7 +88,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     setExternalInventory,
     externalTitle,
     setMetaState,
-    playerLevel = 1
+    playerLevel = 1,
+    customPlayerHeader
 }) => {
   const [isBoxOpen, setIsBoxOpen] = useState(false);
   
@@ -123,6 +125,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   
   // Interaction State
   const [selectedItem, setSelectedItem] = useState<GridItem | null>(null);
+  const [showItemDetails, setShowItemDetails] = useState<boolean>(false); // 控制详情卡片的显示与隐藏
   const [dragState, setDragState] = useState<{
       item: GridItem;
       sourceGrid: 'PLAYER' | 'LOOT';
@@ -512,15 +515,17 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   // --- DRAG & DROP LOGIC ---
 
   const handlePointerDown = (e: React.PointerEvent, item: GridItem, sourceGrid: 'PLAYER' | 'LOOT', cellX: number, cellY: number) => {
-      // Allow scrolling for unidentified items (don't prevent default)
-      if (item.isIdentified) {
-          e.preventDefault();
-      }
+          // Allow scrolling for unidentified items (don't prevent default)
+          if (item.isIdentified) {
+              e.preventDefault();
+          }
 
-      // Lock check: In combat, we ALLOW selection (click), but we will BLOCK dragging in pointerMove
-      if (searchingItemId !== null) return; // Busy
+          // Lock check: In combat, we ALLOW selection (click), but we will BLOCK dragging in pointerMove
+          if (searchingItemId !== null) return; // Busy
+          
+          setShowItemDetails(false); // 核心：每次点击或开始拖拽物品时，自动收起庞大的详情面板
 
-      const rect = e.currentTarget.getBoundingClientRect();
+          const rect = e.currentTarget.getBoundingClientRect();
       
       // Core Fix: e.currentTarget is the bounding box covering the entire item shape.
       // e.clientX - rect.left is exactly the pixel distance from pointer to the item's true top-left corner.
@@ -1528,7 +1533,10 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         )}
 
         {/* PLAYER SECTION */}
-        <div className={`w-full bg-dungeon-dark border-t-2 border-stone-800 z-30 flex flex-col shadow-[0_-10px_50px_rgba(0,0,0,0.8)] pb-4 pt-2 ${!isLootPhase && !externalInventory ? 'h-full justify-center shrink-0' : 'flex-1 min-h-0 overflow-hidden'}`}>
+        <div className={`w-full bg-dungeon-dark border-t-2 border-stone-800 z-30 flex flex-col shadow-[0_-10px_50px_rgba(0,0,0,0.8)] pb-4 shrink-0 ${!isLootPhase && !externalInventory ? 'h-full justify-center' : ''}`}>
+            
+            {/* 动态注入的素体选择器区域 */}
+            {customPlayerHeader}
             
             {/* Info / Action Bar */}
             <div className="min-h-[48px] px-4 py-2 bg-black/40 border-b border-stone-800 mb-2 flex items-center justify-between">
@@ -1553,7 +1561,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                                     {selectedItem.type === 'CONSUMABLE' && (
                                         <button onClick={handleUseItem} className="p-2 bg-green-900/50 text-green-400 border border-green-700 rounded hover:bg-green-900"><LucideZap size={14}/></button>
                                     )}
-                                    <button onClick={() => setSelectedItem(selectedItem)} className="p-2 bg-stone-800 text-stone-300 border border-stone-600 rounded hover:bg-stone-700"><LucideInfo size={14}/></button>
+                                    {/* 点击“信息(i)”图标时，才弹出悬浮卡片 */}
+                                    <button onClick={() => setShowItemDetails(true)} className="p-2 bg-stone-800 text-stone-300 border border-stone-600 rounded hover:bg-stone-700"><LucideInfo size={14}/></button>
                                     {!isCombat && <button onClick={handleRotate} className="p-2 bg-stone-800 text-stone-300 border border-stone-600 rounded hover:bg-stone-700"><LucideRotateCw size={14}/></button>}
                                     {!isCombat && <button onClick={handleTrash} className="p-2 bg-red-950/50 text-red-400 border border-red-900 rounded hover:bg-red-900"><LucideTrash2 size={14}/></button>}
                                 </>
@@ -1654,54 +1663,59 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       )}
       
       {/* Item Details Panel (Overlay when selected) */}
-      {selectedItem && (
-          <div className="fixed inset-x-0 bottom-0 z-50 bg-dungeon-dark border-t border-stone-600 p-4 shadow-2xl animate-slide-in-up pb-8 md:pb-6">
-              <div className="max-w-md mx-auto relative">
-                  <button onClick={() => setSelectedItem(null)} className="absolute top-0 right-0 p-1 text-stone-500"><LucideX size={18}/></button>
-                  <div className="flex gap-4">
-                      {/* Icon Preview */}
-                      <div className="w-16 h-16 bg-black border border-stone-700 flex items-center justify-center shrink-0 relative">
-                          <div className={`w-8 h-8 ${selectedItem.isIdentified ? selectedItem.color.split(' ')[0] : 'bg-stone-600'}`}></div>
-                          {(selectedItem.quantity || 1) > 1 && (
-                              <div className="absolute bottom-1 right-1 text-xs font-mono font-bold text-white bg-black/50 px-1 rounded">x{selectedItem.quantity}</div>
-                          )}
-                      </div>
-                      <div className="flex-1">
-                          <h3 className={`text-lg font-bold font-display ${selectedItem.rarity === 'LEGENDARY' ? 'text-dungeon-gold' : selectedItem.rarity === 'RARE' ? 'text-purple-400' : 'text-stone-200'}`}>
-                              {selectedItem.isIdentified ? selectedItem.name : '未知物体'}
-                          </h3>
-                          <div className="flex justify-between items-center mb-1">
-                              <div className="text-xs text-stone-500 uppercase tracking-widest">{selectedItem.isIdentified ? TYPE_LABELS[selectedItem.type] : selectedItem.type}</div>
-                              
-                              {/* Value Display */}
-                              {selectedItem.isIdentified && (
-                                  <div className="flex items-center gap-1 text-xs font-mono font-bold text-yellow-500 bg-yellow-900/20 px-2 py-0.5 rounded border border-yellow-800">
-                                      <LucideCoins size={12} />
-                                      <span>估值: {selectedItem.value * (selectedItem.quantity || 1)} ₮</span>
-                                  </div>
+      {selectedItem && showItemDetails && (
+          <>
+              {/* 背景透明遮罩：点击任意空白处关闭卡片 */}
+              <div className="fixed inset-0 z-[90]" onClick={() => setShowItemDetails(false)}></div>
+              
+              <div className="absolute inset-x-2 bottom-2 z-[100] bg-stone-950/95 backdrop-blur-md border border-stone-700 p-4 rounded-xl shadow-[0_-10px_40px_rgba(0,0,0,0.9)] animate-slide-in-up">
+                  <div className="max-w-md mx-auto relative w-full">
+                      <button onClick={() => setShowItemDetails(false)} className="absolute -top-2 -right-2 p-1.5 text-stone-400 hover:text-stone-200 bg-black/60 rounded-full border border-stone-700 transition-colors z-10"><LucideX size={16}/></button>
+                      <div className="flex gap-4">
+                          {/* Icon Preview */}
+                          <div className="w-16 h-16 bg-black border border-stone-700 flex items-center justify-center shrink-0 relative">
+                              <div className={`w-8 h-8 ${selectedItem.isIdentified ? selectedItem.color.split(' ')[0] : 'bg-stone-600'}`}></div>
+                              {(selectedItem.quantity || 1) > 1 && (
+                                  <div className="absolute bottom-1 right-1 text-xs font-mono font-bold text-white bg-black/50 px-1 rounded">x{selectedItem.quantity}</div>
                               )}
                           </div>
-                          
-                          {selectedItem.isIdentified ? (
-                              <>
-                                <p className="text-xs text-stone-400 leading-relaxed">{selectedItem.description}</p>
-                                {selectedItem.stats && (
-                                    <div className="flex flex-wrap gap-2 mt-2">
-                                        {Object.entries(selectedItem.stats).map(([k,v]) => (
-                                            <span key={k} className="text-[10px] bg-stone-800 px-1.5 py-0.5 rounded text-stone-300 border border-stone-700">{STAT_LABELS[k] || k}: +{v}</span>
-                                        ))}
-                                    </div>
-                                )}
-                              </>
-                          ) : (
-                              <p className="text-xs text-stone-500 italic">
-                                  {searchingItemId === selectedItem.id ? '正在分析物体构造...' : '这东西被灰尘和污秽覆盖，需要鉴定才能知晓其真面目。'}
-                              </p>
-                          )}
+                          <div className="flex-1">
+                              <h3 className={`text-lg font-bold font-display ${selectedItem.rarity === 'LEGENDARY' ? 'text-dungeon-gold' : selectedItem.rarity === 'RARE' ? 'text-purple-400' : 'text-stone-200'}`}>
+                                  {selectedItem.isIdentified ? selectedItem.name : '未知物体'}
+                              </h3>
+                              <div className="flex justify-between items-center mb-1">
+                                  <div className="text-xs text-stone-500 uppercase tracking-widest">{selectedItem.isIdentified ? TYPE_LABELS[selectedItem.type] : selectedItem.type}</div>
+                                  
+                                  {/* Value Display */}
+                                  {selectedItem.isIdentified && (
+                                      <div className="flex items-center gap-1 text-xs font-mono font-bold text-yellow-500 bg-yellow-900/20 px-2 py-0.5 rounded border border-yellow-800">
+                                          <LucideCoins size={12} />
+                                          <span>估值: {selectedItem.value * (selectedItem.quantity || 1)} ₮</span>
+                                      </div>
+                                  )}
+                              </div>
+                              
+                              {selectedItem.isIdentified ? (
+                                  <>
+                                    <p className="text-xs text-stone-400 leading-relaxed">{selectedItem.description}</p>
+                                    {selectedItem.stats && (
+                                        <div className="flex flex-wrap gap-2 mt-2">
+                                            {Object.entries(selectedItem.stats).map(([k,v]) => (
+                                                <span key={k} className="text-[10px] bg-stone-800 px-1.5 py-0.5 rounded text-stone-300 border border-stone-700">{STAT_LABELS[k] || k}: +{v}</span>
+                                            ))}
+                                        </div>
+                                    )}
+                                  </>
+                              ) : (
+                                  <p className="text-xs text-stone-500 italic">
+                                      {searchingItemId === selectedItem.id ? '正在分析物体构造...' : '这东西被灰尘和污秽覆盖，需要鉴定才能知晓其真面目。'}
+                                  </p>
+                              )}
+                          </div>
                       </div>
                   </div>
               </div>
-          </div>
+          </>
       )}
 
     </div>

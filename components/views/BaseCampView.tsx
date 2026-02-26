@@ -166,11 +166,39 @@ export const BaseCampView: React.FC<BaseCampViewProps> = ({ metaState, setMetaSt
     </div>
   );
 
-  const renderWarehouseTab = () => (
-    <div className="flex flex-col h-full w-full animate-fade-in bg-stone-950">
-        {/* Header & Char Selector */}
-        <div className="flex flex-col gap-3 p-3 border-b border-stone-800 bg-black/60 backdrop-blur-md shrink-0 z-20 shadow-md">
-            <div className="flex justify-between items-center">
+  const renderWarehouseTab = () => {
+    // 将素体选择器抽离，作为背包区的专属头部
+    const characterSelector = (
+        <div className="w-full overflow-x-auto no-scrollbar bg-black/80 border-b border-stone-800 p-2 shadow-inner">
+            <div className="flex gap-2 min-w-max px-2">
+                {metaState.roster.map(char => (
+                    <button 
+                        key={char.id}
+                        onClick={() => setSelectedCharId(char.id)}
+                        className={`relative flex items-center gap-3 px-3 py-1.5 rounded-lg border transition-all duration-200 group ${
+                            selectedCharId === char.id 
+                            ? 'bg-stone-800 border-stone-500 text-stone-100 shadow-[0_0_10px_rgba(0,0,0,0.5)]' 
+                            : 'bg-stone-900/40 border-stone-800 text-stone-600 hover:bg-stone-800 hover:border-stone-700'
+                        }`}
+                    >
+                        <div className={`w-2 h-2 rounded-full ${selectedCharId === char.id ? 'bg-green-500 shadow-[0_0_5px_rgba(34,197,94,0.5)]' : 'bg-stone-700'}`}></div>
+                        <div className="flex flex-col items-start">
+                            <span className={`text-xs font-bold ${selectedCharId === char.id ? 'text-stone-200' : 'text-stone-500 group-hover:text-stone-400'}`}>{char.name}</span>
+                            <span className="text-[8px] font-mono text-stone-600 uppercase">{char.class} LV.{char.level}</span>
+                        </div>
+                        {selectedCharId === char.id && (
+                            <div className="absolute inset-0 border border-stone-500/30 rounded-lg animate-pulse pointer-events-none"></div>
+                        )}
+                    </button>
+                ))}
+            </div>
+        </div>
+    );
+
+    return (
+        <div className="flex flex-col h-full w-full animate-fade-in bg-stone-950">
+            {/* Header: 只保留纯粹的仓库信息 */}
+            <div className="flex justify-between items-center p-3 border-b border-stone-800 bg-black/60 backdrop-blur-md shrink-0 z-20 shadow-md">
                 <div className="flex items-center gap-2">
                     <div className="p-1.5 bg-stone-900 rounded border border-stone-700 text-stone-400">
                         <LucidePackage size={16} />
@@ -185,49 +213,24 @@ export const BaseCampView: React.FC<BaseCampViewProps> = ({ metaState, setMetaSt
                 </div>
             </div>
             
-            {/* Character Selector */}
-            <div className="w-full overflow-x-auto no-scrollbar">
-                <div className="flex gap-2 min-w-max">
-                    {metaState.roster.map(char => (
-                        <button 
-                            key={char.id}
-                            onClick={() => setSelectedCharId(char.id)}
-                            className={`relative flex items-center gap-3 px-3 py-2 rounded-lg border transition-all duration-200 group ${
-                                selectedCharId === char.id 
-                                ? 'bg-stone-800 border-stone-500 text-stone-100 shadow-[0_0_10px_rgba(0,0,0,0.5)]' 
-                                : 'bg-stone-900/40 border-stone-800 text-stone-600 hover:bg-stone-800 hover:border-stone-700'
-                            }`}
-                        >
-                            <div className={`w-2 h-2 rounded-full ${selectedCharId === char.id ? 'bg-green-500 shadow-[0_0_5px_rgba(34,197,94,0.5)]' : 'bg-stone-700'}`}></div>
-                            <div className="flex flex-col items-start">
-                                <span className={`text-xs font-bold ${selectedCharId === char.id ? 'text-stone-200' : 'text-stone-500 group-hover:text-stone-400'}`}>{char.name}</span>
-                                <span className="text-[8px] font-mono text-stone-600 uppercase">{char.class} LV.{char.level}</span>
-                            </div>
-                            {selectedCharId === char.id && (
-                                <div className="absolute inset-0 border border-stone-500/30 rounded-lg animate-pulse"></div>
-                            )}
-                        </button>
-                    ))}
-                </div>
+            <div className="flex-1 overflow-hidden relative bg-stone-950">
+                <InventoryView 
+                    inventory={selectedChar.inventory} 
+                    setInventory={handleCharacterInventoryUpdate}
+                    onFinish={() => {}} 
+                    isLootPhase={false} 
+                    isCombat={false}
+                    currentStage={1}
+                    maxStage={5}
+                    externalInventory={metaState.warehouse}
+                    setExternalInventory={handleWarehouseUpdate}
+                    externalTitle="基地仓库"
+                    customPlayerHeader={characterSelector}
+                />
             </div>
         </div>
-        
-        <div className="flex-1 overflow-hidden relative bg-stone-950">
-            <InventoryView 
-                inventory={selectedChar.inventory} 
-                setInventory={handleCharacterInventoryUpdate}
-                onFinish={() => {}} 
-                isLootPhase={false} 
-                isCombat={false}
-                currentStage={1}
-                maxStage={5}
-                externalInventory={metaState.warehouse}
-                setExternalInventory={handleWarehouseUpdate}
-                externalTitle="基地仓库"
-            />
-        </div>
-    </div>
-  );
+    );
+  };
 
   const TabButton = ({ id, icon, label }: { id: Tab, icon: React.ReactNode, label: string }) => (
       <button 
