@@ -608,11 +608,19 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               // EDGE HOVER PAGINATION
               let newHoverEdge: 'LEFT' | 'RIGHT' | null = null;
               if (lootRect && isPaginated) {
-                  // 优化检测区域：等比缩放边缘触发距离，防误触
-                  const marginOut = 60 * scale; 
-                  const marginIn = 15 * scale;  
-                  const isNearLeft = e.clientX >= lootRect.left - marginOut && e.clientX <= lootRect.left + marginIn && e.clientY >= lootRect.top && e.clientY <= lootRect.bottom;
-                  const isNearRight = e.clientX <= lootRect.right + marginOut && e.clientX >= lootRect.right - marginIn && e.clientY >= lootRect.top && e.clientY <= lootRect.bottom;
+                  // 1. 获取物品占用的列数
+                  const itemCols = dragState.item.shape[0]?.length || 1;
+                  
+                  // 2. 动态计算当前缩放下的物品实际视觉宽度 (36px格子 + 4px间隙)
+                  const itemVisualWidth = itemCols * (36 + 4) * scale;
+                  
+                  // 3. 计算物品在屏幕上的视觉左边缘和中心点 X 坐标
+                  const itemLeftX = e.clientX - dragState.grabOffsetX;
+                  const itemCenterX = itemLeftX + itemVisualWidth / 2;
+
+                  // 4. 核心判定：物品的中心点越过仓库左右边界 (即精确超出 50% 位置)，且垂直高度在仓库范围内
+                  const isNearLeft = itemCenterX < lootRect.left && itemCenterX > lootRect.left - itemVisualWidth && e.clientY >= lootRect.top && e.clientY <= lootRect.bottom;
+                  const isNearRight = itemCenterX > lootRect.right && itemCenterX < lootRect.right + itemVisualWidth && e.clientY >= lootRect.top && e.clientY <= lootRect.bottom;
                   
                   const { page, total } = paginationRef.current;
                   if (isNearLeft && page > 0) newHoverEdge = 'LEFT';
