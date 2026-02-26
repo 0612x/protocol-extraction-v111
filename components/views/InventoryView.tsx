@@ -552,11 +552,11 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       pageYOffset: number = 0,
       rowsPerPageLimit?: number
   ) => {
-      // 应用全局等比缩放系数，确保任何屏幕下的网格捕捉精准无误！
+      // 核心修复：引入全局 scale 因子，并在计算中绝对对齐屏幕像素！
       const scaledStride = (CELL_SIZE + CELL_GAP) * scale;
       const scaledPadding = 8 * scale;
       
-      // Calculate true visual top-left relative to grid content area
+      // Calculate true visual top-left relative to grid content area in SCREEN PIXELS
       const itemLeft = clientX - grabOffsetX - gridRect.left - scaledPadding;
       const itemTop = clientY - grabOffsetY - gridRect.top - scaledPadding;
       
@@ -1178,45 +1178,20 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       if (dragState && dragState.isDragging && gridType === activeGhostGrid) {
            const rect = gridType === 'PLAYER' ? playerGridRef.current?.getBoundingClientRect() : lootGridRef.current?.getBoundingClientRect();
            if (rect) {
-               const stride = CELL_SIZE + CELL_GAP;
-               // Calculate relative position within the grid container
-               // We need to account for the scroll position if the container is scrollable, 
-               // but currently our grids are fixed size.
-               // However, we must ensure we are using clientX/Y correctly relative to the grid's viewport position.
-               
-               // The logic below assumes drag position is global client coordinates.
-               // rect.left/top are also global client coordinates.
-               const relativeX = dragState.currentX - rect.left;
-               const relativeY = dragState.currentY - rect.top;
-               
-               // Adjust for grab offset to find the top-left of the item
-               const itemTopLeftX = relativeX - dragState.grabOffsetX;
-               const itemTopLeftY = relativeY - dragState.grabOffsetY;
-               
-               // 修正: 获取网格尺寸与解锁行，确保与 handleMove 逻辑完全同步
-               const gH = gridType === 'PLAYER' ? inventory.height : (externalInventory ? externalInventory.height : CONTAINER_HEIGHT);
-               const gW = gridType === 'PLAYER' ? inventory.width : (externalInventory ? externalInventory.width : CONTAINER_WIDTH);
+               // 核心修复：直接复用 calculateTargetCell，保证拖拽高亮与落子判定 100% 统一，且包含动态缩放！
+               const gH = gridType === 'PLAYER' ? INVENTORY_HEIGHT : (externalInventory ? externalInventory.height : CONTAINER_HEIGHT);
+               const gW = gridType === 'PLAYER' ? INVENTORY_WIDTH : (externalInventory ? externalInventory.width : CONTAINER_WIDTH);
                const targetUnlocked = gridType === 'PLAYER' ? inventory.unlockedRows : externalInventory?.unlockedRows;
 
                const pageYOffset = gridType === 'LOOT' && isPaginated ? warehousePage * rowsPerPage : 0;
                const rowsLimit = gridType === 'LOOT' && isPaginated ? rowsPerPage : undefined;
 
-               const shapeW = dragState.item.shape[0]?.length || 1;
-               const shapeH = dragState.item.shape.length || 1;
-               const padding = 8;
-
-               let cellX = Math.round(itemTopLeftX / stride);
-               let cellY = Math.round(itemTopLeftY / stride) + pageYOffset;
-
-               cellX = Math.max(0, Math.min(cellX, gW - shapeW));
-               
-               const currentGridBottom = rowsLimit ? Math.min(gH, pageYOffset + rowsLimit) : gH;
-               cellY = Math.max(pageYOffset, Math.min(cellY, currentGridBottom - shapeH));
-               
-               if (targetUnlocked !== undefined) {
-                   cellY = Math.min(cellY, targetUnlocked - shapeH);
-                   cellY = Math.max(pageYOffset, cellY);
-               }
+               const { cellX, cellY } = calculateTargetCell(
+                   dragState.currentX, dragState.currentY, 
+                   dragState.grabOffsetX, dragState.grabOffsetY, 
+                   rect, gW, gH, 
+                   dragState.item.shape, targetUnlocked, pageYOffset, rowsLimit
+               );
                
                // Check if this specific cell (x,y) is part of the ghost shape at (cellX, cellY)
                const dx = x - cellX;
