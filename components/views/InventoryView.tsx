@@ -149,23 +149,35 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const [rotateError, setRotateError] = useState(false); // For rotation failure feedback
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const containerRef = useRef<HTMLDivElement>(null);
+
   // DYNAMIC SCALE ENGINE (等比缩小核心)
   const [scale, setScale] = useState(1);
   useEffect(() => {
       const updateScale = () => {
-          const availableH = window.innerHeight;
-          const availableW = window.innerWidth;
-          // 理想完整视图所需高度：仓库+背包同时存在需要约 760px，仅背包需 450px
-          const requiredH = (externalInventory || isLootPhase) ? 760 : 450; 
-          const requiredW = 380;
-          // 取宽度和高度中限制更严格的缩放比，且最大不放大超过 1
+          if (!containerRef.current) return;
+          // 核心修复：必须获取当前容器的【真实可用高度】，而不是整个屏幕高度！排除外层标题栏和 Padding 的干扰
+          const availableH = containerRef.current.clientHeight;
+          const availableW = containerRef.current.clientWidth;
+          
+          // 优化：略微降低高度期望值，让整体画面更加紧凑
+          const requiredH = (externalInventory || isLootPhase) ? 720 : 420; 
+          const requiredW = 360;
+          
           let s = Math.min(availableH / requiredH, availableW / requiredW);
           if (s > 1) s = 1;
           setScale(s);
       };
+      
+      // 初始化执行，并延迟 100ms 再次执行以确保 DOM 结构已经完全撑开
       updateScale();
+      const timer = setTimeout(updateScale, 100);
+      
       window.addEventListener('resize', updateScale);
-      return () => window.removeEventListener('resize', updateScale);
+      return () => {
+          window.removeEventListener('resize', updateScale);
+          clearTimeout(timer);
+      };
   }, [externalInventory, isLootPhase]);
 
   // PAGINATION LOGIC (Warehouse Box Mode)
@@ -1373,15 +1385,18 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   };
 
   return (
-    <div className="w-full h-full flex items-center justify-center bg-dungeon-black text-stone-300 relative font-serif animate-fade-in touch-none overflow-hidden">
+    <div 
+        ref={containerRef}
+        className="w-full h-full flex flex-col items-center justify-start bg-dungeon-black text-stone-300 relative font-serif animate-fade-in touch-none overflow-hidden pt-1"
+    >
       
       <div className="absolute inset-0 bg-noise opacity-5 pointer-events-none"></div>
 
       {/* Main Scaled Container - "等比缩小" 核心包装器 */}
       <div 
-        className="flex flex-col w-full max-w-[400px] shrink-0 origin-center relative z-10 transition-transform duration-300"
+        className="flex flex-col w-full max-w-[400px] shrink-0 origin-top relative z-10 transition-transform duration-300"
         style={{ 
-            height: (externalInventory || isLootPhase) ? '760px' : '450px',
+            height: (externalInventory || isLootPhase) ? '720px' : '420px',
             transform: `scale(${scale})` 
         }}
       >
