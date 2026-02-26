@@ -149,6 +149,25 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const [rotateError, setRotateError] = useState(false); // For rotation failure feedback
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // DYNAMIC SCALE ENGINE (等比缩小核心)
+  const [scale, setScale] = useState(1);
+  useEffect(() => {
+      const updateScale = () => {
+          const availableH = window.innerHeight;
+          const availableW = window.innerWidth;
+          // 理想完整视图所需高度：仓库+背包同时存在需要约 760px，仅背包需 450px
+          const requiredH = (externalInventory || isLootPhase) ? 760 : 450; 
+          const requiredW = 380;
+          // 取宽度和高度中限制更严格的缩放比，且最大不放大超过 1
+          let s = Math.min(availableH / requiredH, availableW / requiredW);
+          if (s > 1) s = 1;
+          setScale(s);
+      };
+      updateScale();
+      window.addEventListener('resize', updateScale);
+      return () => window.removeEventListener('resize', updateScale);
+  }, [externalInventory, isLootPhase]);
+
   // PAGINATION LOGIC (Warehouse Box Mode)
   const [warehousePage, setWarehousePage] = useState(0);
   const isPaginated = !!externalInventory;
@@ -521,16 +540,17 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       pageYOffset: number = 0,
       rowsPerPageLimit?: number
   ) => {
-      const stride = CELL_SIZE + CELL_GAP;
-      const padding = 8;
+      // 应用全局等比缩放系数，确保任何屏幕下的网格捕捉精准无误！
+      const scaledStride = (CELL_SIZE + CELL_GAP) * scale;
+      const scaledPadding = 8 * scale;
       
       // Calculate true visual top-left relative to grid content area
-      const itemLeft = clientX - grabOffsetX - gridRect.left - padding;
-      const itemTop = clientY - grabOffsetY - gridRect.top - padding;
+      const itemLeft = clientX - grabOffsetX - gridRect.left - scaledPadding;
+      const itemTop = clientY - grabOffsetY - gridRect.top - scaledPadding;
       
       // Math.round is perfectly accurate and avoids half-cell floor biases
-      let cellX = Math.round(itemLeft / stride);
-      let cellY = Math.round(itemTop / stride) + pageYOffset;
+      let cellX = Math.round(itemLeft / scaledStride);
+      let cellY = Math.round(itemTop / scaledStride) + pageYOffset;
       
       const shapeW = itemShape ? (itemShape[0]?.length || 1) : 1;
       const shapeH = itemShape ? (itemShape.length || 1) : 1;
@@ -576,9 +596,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               // EDGE HOVER PAGINATION
               let newHoverEdge: 'LEFT' | 'RIGHT' | null = null;
               if (lootRect && isPaginated) {
-                  // 优化检测区域：向网格外部延伸 60px，内部收缩至 15px，完美防误触！
-                  const marginOut = 60; 
-                  const marginIn = 15;  
+                  // 优化检测区域：等比缩放边缘触发距离，防误触
+                  const marginOut = 60 * scale; 
+                  const marginIn = 15 * scale;  
                   const isNearLeft = e.clientX >= lootRect.left - marginOut && e.clientX <= lootRect.left + marginIn && e.clientY >= lootRect.top && e.clientY <= lootRect.bottom;
                   const isNearRight = e.clientX <= lootRect.right + marginOut && e.clientX >= lootRect.right - marginIn && e.clientY >= lootRect.top && e.clientY <= lootRect.bottom;
                   
@@ -1353,12 +1373,18 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   };
 
   return (
-    <div className="w-full h-full flex flex-col bg-dungeon-black text-stone-300 relative font-serif animate-fade-in touch-none overflow-hidden">
+    <div className="w-full h-full flex items-center justify-center bg-dungeon-black text-stone-300 relative font-serif animate-fade-in touch-none overflow-hidden">
       
       <div className="absolute inset-0 bg-noise opacity-5 pointer-events-none"></div>
 
-      {/* Main Container - Flex Column to fit both grids */}
-      <div className="flex-1 flex flex-col w-full h-full overflow-hidden">
+      {/* Main Scaled Container - "等比缩小" 核心包装器 */}
+      <div 
+        className="flex flex-col w-full max-w-[400px] shrink-0 origin-center relative z-10 transition-transform duration-300"
+        style={{ 
+            height: (externalInventory || isLootPhase) ? '760px' : '450px',
+            transform: `scale(${scale})` 
+        }}
+      >
 
         {/* LOOT / EXTERNAL SECTION */}
         {(isLootPhase || externalInventory) && (
@@ -1588,14 +1614,16 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         </div>
       </div>
 
-      {/* Drag Layer - Now uses consistent visuals with Smart Borders */}
+      {/* Drag Layer - Outside scaled container to prevent clipping, scaled down to match */}
       {dragState && dragState.isDragging && (
           <div 
             className="fixed pointer-events-none z-[100] opacity-80"
             style={{ 
-                left: dragState.currentX, 
-                top: dragState.currentY, // 彻底移除偏移，实现指哪打哪，修复边缘判定
-                transform: `translate(-${dragState.grabOffsetX}px, -${dragState.grabOffsetY}px)`
+                // 完美贴合光标，并同步缩小，保持“指哪打哪”手感
+                left: dragState.currentX - dragState.grabOffsetX, 
+                top: dragState.currentY - dragState.grabOffsetY,
+                transform: `scale(${scale})`,
+                transformOrigin: 'top left'
             }}
           >
               <div className="grid gap-px p-1" style={{ gridTemplateColumns: `repeat(${dragState.item.shape[0]?.length || 1}, 36px)` }}>
